@@ -107,7 +107,7 @@ address is always the one that's longer (because it's P2WSH and not P2PKH).`,
 	)
 
 	cc.rootKey = newRootKey(cc.cmd, "deriving keys")
-	cc.inputs = newInputFlags(cc.cmd)
+	cc.inputs = newInputFlags(cc.cmd, cc.rootKey)
 
 	return cc.cmd
 }

@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lightningnetwork/lnd"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/keychain"
 )
 
 type NumberString uint64
@@ -124,6 +126,18 @@ func (c *PendingChannelsChannel) AsSummaryEntry() *SummaryEntry {
 	}
 }
 
+type DBChannelsFile struct {
+	Content []byte
+}
+
+func (f *DBChannelsFile) AsSummaryEntries(keyRing keychain.KeyRing) ([]*SummaryEntry, error) {
+	channels, err := lnd.DecryptDbChannels(keyRing, f.Content)
+	if err != nil {
+		return nil, fmt.Errorf("lnd.DecryptDbChannels failed: %w", err)
+	}
+	return channelsToSummaries(channels), nil
+}
+
 type ChannelDBFile struct {
 	DB *channeldb.ChannelStateDB
 }
@@ -133,6 +147,10 @@ func (c *ChannelDBFile) AsSummaryEntries() ([]*SummaryEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error fetching channels: %w", err)
 	}
+	return channelsToSummaries(channels), nil
+}
+
+func channelsToSummaries(channels []*channeldb.OpenChannel) []*SummaryEntry {
 	result := make([]*SummaryEntry, len(channels))
 	for idx, channel := range channels {
 		result[idx] = &SummaryEntry{
@@ -152,7 +170,7 @@ func (c *ChannelDBFile) AsSummaryEntries() ([]*SummaryEntry, error) {
 			),
 		}
 	}
-	return result, nil
+	return result
 }
 
 func (f *SummaryEntryFile) AsSummaryEntries() ([]*SummaryEntry, error) {

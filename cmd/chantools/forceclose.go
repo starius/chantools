@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"time"
 
+	thelnd "github.com/lightningnetwork/lnd"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/lightninglabs/chantools/btc"
@@ -20,9 +21,10 @@ import (
 )
 
 type forceCloseCommand struct {
-	APIURL    string
-	ChannelDB string
-	Publish   bool
+	APIURL     string
+	ChannelDB  string
+	DBChannels string
+	Publish    bool
 
 	rootKey *rootKey
 	inputs  *inputFlags
@@ -61,13 +63,17 @@ blocks) transaction *or* they have a watch tower looking out for them.
 		&cc.ChannelDB, "channeldb", "", "lnd channel.db file to use "+
 			"for force-closing channels",
 	)
+	cc.cmd.Flags().StringVar(
+		&cc.DBChannels, "dbchannels", "", "lnd db-channels file to use "+
+			"for force-closing channels",
+	)
 	cc.cmd.Flags().BoolVar(
 		&cc.Publish, "publish", false, "publish force-closing TX to "+
 			"the chain API instead of just printing the TX",
 	)
 
 	cc.rootKey = newRootKey(cc.cmd, "decrypting the backup")
-	cc.inputs = newInputFlags(cc.cmd)
+	cc.inputs = newInputFlags(cc.cmd, cc.rootKey)
 
 	return cc.cmd
 }
@@ -78,13 +84,34 @@ func (c *forceCloseCommand) Execute(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("error reading root key: %w", err)
 	}
 
-	// Check that we have a channel DB.
-	if c.ChannelDB == "" {
-		return fmt.Errorf("rescue DB is required")
+	if c.ChannelDB != "" && c.DBChannels != "" {
+		return fmt.Errorf("rescue DB and db-channels can not be used together")
 	}
-	db, err := lnd.OpenDB(c.ChannelDB, true)
-	if err != nil {
-		return fmt.Errorf("error opening rescue DB: %w", err)
+	var channels []*channeldb.OpenChannel
+	if c.ChannelDB != "" {
+		db, err := lnd.OpenDB(c.ChannelDB, true)
+		if err != nil {
+			return fmt.Errorf("error opening rescue DB: %w", err)
+		}
+		channels, err = db.ChannelStateDB().FetchAllChannels()
+		if err != nil {
+			return fmt.Errorf("chanDb.FetchAllChannels failed: %w", err)
+		}
+	} else if c.DBChannels != "" {
+		content, err := readInput(c.DBChannels)
+		if err != nil {
+			return fmt.Errorf("failed to read db channels file %s: %w", c.DBChannels, err)
+		}
+		keyRing := &lnd.HDKeyRing{
+			ExtendedKey: extendedKey,
+			ChainParams: chainParams,
+		}
+		channels, err = thelnd.DecryptDbChannels(keyRing, content)
+		if err != nil {
+			return fmt.Errorf("lnd.DecryptDbChannels failed: %w", err)
+		}
+	} else {
+		return fmt.Errorf("rescue DB or db-channels is required")
 	}
 
 	// Parse channel entries from any of the possible input files.
@@ -93,18 +120,14 @@ func (c *forceCloseCommand) Execute(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	return forceCloseChannels(
-		c.APIURL, extendedKey, entries, db.ChannelStateDB(), c.Publish,
+		c.APIURL, extendedKey, entries, channels, c.Publish,
 	)
 }
 
 func forceCloseChannels(apiURL string, extendedKey *hdkeychain.ExtendedKey,
-	entries []*dataformat.SummaryEntry, chanDb *channeldb.ChannelStateDB,
+	entries []*dataformat.SummaryEntry, channels []*channeldb.OpenChannel,
 	publish bool) error {
 
-	channels, err := chanDb.FetchAllChannels()
-	if err != nil {
-		return err
-	}
 	api := &btc.ExplorerAPI{BaseURL: apiURL}
 	signer := &lnd.Signer{
 		ExtendedKey: extendedKey,

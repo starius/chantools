@@ -100,7 +100,7 @@ chantools rescueclosed --fromsummary results/summary-xxxxxx.json \
 			"the commit_point values when rescuing multiple "+
 			"channels at the same time")
 	cc.rootKey = newRootKey(cc.cmd, "decrypting the backup")
-	cc.inputs = newInputFlags(cc.cmd)
+	cc.inputs = newInputFlags(cc.cmd, cc.rootKey)
 
 	return cc.cmd
 }

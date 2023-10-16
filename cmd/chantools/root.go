@@ -136,9 +136,16 @@ func main() {
 	}
 }
 
+type cachedKey struct {
+	key      *hdkeychain.ExtendedKey
+	birthDay time.Time
+}
+
 type rootKey struct {
 	RootKey string
 	BIP39   bool
+
+	cached *cachedKey
 }
 
 func newRootKey(cmd *cobra.Command, desc string) *rootKey {
@@ -165,6 +172,23 @@ func (r *rootKey) read() (*hdkeychain.ExtendedKey, error) {
 func (r *rootKey) readWithBirthday() (*hdkeychain.ExtendedKey, time.Time,
 	error) {
 
+	if r.cached == nil {
+		key, birthDay, err := r.readWithBirthdayImpl()
+		if err != nil {
+			return nil, time.Unix(0, 0), err
+		}
+		r.cached = &cachedKey{
+			key:      key,
+			birthDay: birthDay,
+		}
+	}
+
+	return r.cached.key, r.cached.birthDay, nil
+}
+
+func (r *rootKey) readWithBirthdayImpl() (*hdkeychain.ExtendedKey, time.Time,
+	error) {
+
 	// Check that root key is valid or fall back to console input.
 	switch {
 	case r.RootKey != "":
@@ -185,10 +209,15 @@ type inputFlags struct {
 	PendingChannels string
 	FromSummary     string
 	FromChannelDB   string
+	FromDBChannels  string
+
+	rootKey *rootKey // For reading FromDBChannels.
 }
 
-func newInputFlags(cmd *cobra.Command) *inputFlags {
-	f := &inputFlags{}
+func newInputFlags(cmd *cobra.Command, rootKey *rootKey) *inputFlags {
+	f := &inputFlags{
+		rootKey: rootKey,
+	}
 	cmd.Flags().StringVar(&f.ListChannels, "listchannels", "", "channel "+
 		"input is in the format of lncli's listchannels format; "+
 		"specify '-' to read from stdin",
@@ -204,6 +233,11 @@ func newInputFlags(cmd *cobra.Command) *inputFlags {
 	cmd.Flags().StringVar(&f.FromChannelDB, "fromchanneldb", "", "channel "+
 		"input is in the format of an lnd channel.db file",
 	)
+	if rootKey != nil {
+		cmd.Flags().StringVar(&f.FromDBChannels, "fromdbchannels", "", "channel "+
+			"input is in the format of an lnd db-channels",
+		)
+	}
 
 	return f
 }
@@ -236,6 +270,22 @@ func (f *inputFlags) parseInputType() ([]*dataformat.SummaryEntry, error) {
 		}
 		target = &dataformat.ChannelDBFile{DB: db.ChannelStateDB()}
 		return target.AsSummaryEntries()
+
+	case f.FromDBChannels != "":
+		content, err = readInput(f.FromDBChannels)
+		if err != nil {
+			return nil, err
+		}
+		extendedKey, err := f.rootKey.read()
+		if err != nil {
+			return nil, fmt.Errorf("error reading root key: %w", err)
+		}
+		keyRing := &lnd.HDKeyRing{
+			ExtendedKey: extendedKey,
+			ChainParams: chainParams,
+		}
+		target := &dataformat.DBChannelsFile{Content: content}
+		return target.AsSummaryEntries(keyRing)
 
 	default:
 		return nil, fmt.Errorf("an input file must be specified")

@@ -36,7 +36,7 @@ chantools summary --fromchanneldb ~/.lnd/data/graph/mainnet/channel.db`,
 			"be esplora compatible)",
 	)
 
-	cc.inputs = newInputFlags(cc.cmd)
+	cc.inputs = newInputFlags(cc.cmd, nil)
 
 	return cc.cmd
 }

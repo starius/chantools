@@ -77,7 +77,7 @@ parameter to 144.`,
 	)
 
 	cc.rootKey = newRootKey(cc.cmd, "deriving keys")
-	cc.inputs = newInputFlags(cc.cmd)
+	cc.inputs = newInputFlags(cc.cmd, cc.rootKey)
 
 	return cc.cmd
 }
