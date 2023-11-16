@@ -253,6 +253,9 @@ func CollectDebugInfo(channel *channeldb.OpenChannel,
 		commitPoint, whoseCommit, chanType, ourChanCfg, theirChanCfg,
 	)
 
+	// FIXME: fill auxLeaf for Tapscript root channels.
+	var auxLeaf input.AuxTapLeaf
+
 	// First, we create the script for the delayed "pay-to-self" output.
 	// This output has 2 main redemption clauses: either we can redeem the
 	// output after a relative block delay, or the remote node can claim
@@ -260,7 +263,7 @@ func CollectDebugInfo(channel *channeldb.OpenChannel,
 	// commitment transaction.
 	toLocalScript, err := lnwallet.CommitScriptToSelf(
 		chanType, initiator, keyRing.ToLocalKey, keyRing.RevocationKey,
-		uint32(ourChanCfg.CsvDelay), leaseExpiry,
+		uint32(ourChanCfg.CsvDelay), leaseExpiry, auxLeaf,
 	)
 	if err != nil {
 		return nil, err
@@ -268,7 +271,7 @@ func CollectDebugInfo(channel *channeldb.OpenChannel,
 
 	// Next, we create the script paying to the remote.
 	toRemoteScript, _, err := lnwallet.CommitScriptToRemote(
-		chanType, initiator, keyRing.ToRemoteKey, leaseExpiry,
+		chanType, initiator, keyRing.ToRemoteKey, leaseExpiry, auxLeaf,
 	)
 	if err != nil {
 		return nil, err
