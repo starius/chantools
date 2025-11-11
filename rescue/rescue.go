@@ -36,7 +36,7 @@ const (
 	commitmentReadLimit = 1 << 20
 )
 
-// RecoverChannels scans a raw channel.db byte stream and rebuilds every entry
+// RescueChannels scans a raw channel.db byte stream and rebuilds every entry
 // that still lives in LND's open-channel bucket. This includes:
 //   - Pending-open channels (funding TX not yet confirmed)
 //   - Fully open/active channels
@@ -47,7 +47,7 @@ const (
 // not surfaced, because their metadata is stored elsewhere in channel.db.
 // The reader must implement io.ReaderAt so random access near recovered keys
 // is possible.
-func RecoverChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
+func RescueChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 	matches, err := scanForChannels(r)
 	if err != nil {
 		return nil, err
@@ -77,12 +77,12 @@ func LoadChannels(dbPath string, rescue bool) ([]*channeldb.OpenChannel, error) 
 
 	file, fileErr := os.Open(dbPath)
 	if fileErr != nil {
-		return nil, fmt.Errorf("error opening channel DB for recovery: %w",
+		return nil, fmt.Errorf("error opening channel DB for rescue: %w",
 			fileErr)
 	}
 	defer func() { _ = file.Close() }()
 
-	recovered, recErr := RecoverChannels(file)
+	recovered, recErr := RescueChannels(file)
 	if recErr != nil {
 		return nil, recErr
 	}

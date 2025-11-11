@@ -38,7 +38,7 @@ type forceCloseCommand struct {
 	APIURL    string
 	ChannelDB string
 	Publish   bool
-	Recover   bool
+	Rescue    bool
 
 	rootKey *rootKey
 	inputs  *inputFlags
@@ -71,7 +71,7 @@ func newForceCloseCommand() *cobra.Command {
 			"the chain API instead of just printing the TX",
 	)
 	cc.cmd.Flags().BoolVar(
-		&cc.Recover, "recover", false, "recover channels directly "+
+		&cc.Rescue, "rescue", false, "rescue channels directly "+
 			"from a raw channel.db without opening it with lnd",
 	)
 
@@ -97,7 +97,7 @@ func (c *forceCloseCommand) Execute(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	channels, err := rescue.LoadChannels(c.ChannelDB, c.Recover)
+	channels, err := rescue.LoadChannels(c.ChannelDB, c.Rescue)
 	if err != nil {
 		return err
 	}

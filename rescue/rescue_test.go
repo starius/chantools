@@ -39,9 +39,9 @@ func testDBPath(t *testing.T) string {
 	)
 }
 
-func recoverAll(t *testing.T, data []byte) []*channeldb.OpenChannel {
+func rescueAll(t *testing.T, data []byte) []*channeldb.OpenChannel {
 	t.Helper()
-	chans, err := RecoverChannels(bytes.NewReader(data))
+	chans, err := RescueChannels(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("recover channels: %v", err)
 	}
@@ -56,9 +56,9 @@ func channelMap(chans []*channeldb.OpenChannel) map[string]*channeldb.OpenChanne
 	return out
 }
 
-func TestRecoverChannelsFromCorruptedFile(t *testing.T) {
+func TestRescueChannelsFromCorruptedFile(t *testing.T) {
 	clean := loadTestDB(t)
-	baseline := recoverAll(t, clean)
+	baseline := rescueAll(t, clean)
 	if len(baseline) == 0 {
 		t.Fatal("expected channels from clean db")
 	}
@@ -79,7 +79,7 @@ func TestRecoverChannelsFromCorruptedFile(t *testing.T) {
 		t.Fatal("expected corrupted db to fail opening")
 	}
 
-	recovered := recoverAll(t, corrupted)
+	recovered := rescueAll(t, corrupted)
 	if len(recovered) != len(baseline) {
 		t.Fatalf("expected %d channels, got %d", len(baseline), len(recovered))
 	}

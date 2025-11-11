@@ -17,7 +17,7 @@ type dumpChannelsCommand struct {
 	Closed       bool
 	Pending      bool
 	WaitingClose bool
-	Recover      bool
+	Rescue       bool
 
 	cmd *cobra.Command
 }
@@ -51,7 +51,7 @@ given lnd channel.db gile in a human readable format.`,
 			"channels instead of open",
 	)
 	cc.cmd.Flags().BoolVar(
-		&cc.Recover, "recover", false, "fall back to raw channel.db "+
+		&cc.Rescue, "rescue", false, "fall back to raw channel.db "+
 			"recovery when dumping open channels and the DB "+
 			"cannot be opened normally",
 	)
@@ -71,8 +71,8 @@ func (c *dumpChannelsCommand) Execute(_ *cobra.Command, _ []string) error {
 	}
 
 	if c.Closed {
-		if c.Recover {
-			return errors.New("--recover cannot be used with --closed")
+		if c.Rescue {
+			return errors.New("--rescue cannot be used with --closed")
 		}
 
 		db, _, err := lnd.OpenDB(c.ChannelDB, true)
@@ -84,8 +84,7 @@ func (c *dumpChannelsCommand) Execute(_ *cobra.Command, _ []string) error {
 		return dumpClosedChannelInfo(db.ChannelStateDB())
 	}
 
-	recoverFallback := c.Recover
-	channels, err := rescue.LoadChannels(c.ChannelDB, recoverFallback)
+	channels, err := rescue.LoadChannels(c.ChannelDB, c.Rescue)
 	if err != nil {
 		return err
 	}
