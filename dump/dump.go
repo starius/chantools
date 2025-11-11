@@ -173,13 +173,17 @@ func openChannelDump(channel *channeldb.OpenChannel,
 			return nil, err
 		}
 	}
-	revPreimage, err := channel.RevocationProducer.AtIndex(
-		channel.LocalCommitment.CommitHeight,
-	)
-	if err != nil {
-		return nil, err
+
+	var perCommitPoint *btcec.PublicKey
+	if channel.RevocationProducer != nil {
+		revPreimage, err := channel.RevocationProducer.AtIndex(
+			channel.LocalCommitment.CommitHeight,
+		)
+		if err != nil {
+			return nil, err
+		}
+		perCommitPoint = input.ComputeCommitmentPoint(revPreimage[:])
 	}
-	perCommitPoint := input.ComputeCommitmentPoint(revPreimage[:])
 
 	openChan := &OpenChannel{
 		ChanType:               channel.ChanType,
@@ -219,25 +223,33 @@ func openChannelDump(channel *channeldb.OpenChannel,
 		RemoteShutdownScript: channel.RemoteShutdownScript,
 	}
 
-	localDebug, err := CollectDebugInfo(
-		channel, perCommitPoint, true, channel.IsInitiator, params,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("error collecting local debug info: %w",
-			err)
+	if perCommitPoint != nil {
+		localDebug, err := CollectDebugInfo(
+			channel, perCommitPoint, true, channel.IsInitiator,
+			params,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error collecting local debug info: %w",
+				err)
+		}
+		if localDebug != nil {
+			openChan.LocalCommitmentDebug = *localDebug
+		}
 	}
 
-	remoteDebug, err := CollectDebugInfo(
-		channel, channel.RemoteCurrentRevocation, false,
-		!channel.IsInitiator, params,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("error collecting remote debug info: %w",
-			err)
+	if channel.RemoteCurrentRevocation != nil {
+		remoteDebug, err := CollectDebugInfo(
+			channel, channel.RemoteCurrentRevocation, false,
+			!channel.IsInitiator, params,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error collecting remote debug info: %w",
+				err)
+		}
+		if remoteDebug != nil {
+			openChan.RemoteCommitmentDebug = *remoteDebug
+		}
 	}
-
-	openChan.LocalCommitmentDebug = *localDebug
-	openChan.RemoteCommitmentDebug = *remoteDebug
 
 	return openChan, nil
 }
