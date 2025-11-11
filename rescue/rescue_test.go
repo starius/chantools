@@ -62,7 +62,7 @@ func TestRescueChannelsFromCorruptedFile(t *testing.T) {
 
 	clean := loadTestDB(t)
 	baseline := rescueAll(t, clean)
-	req.NotEmpty(baseline, "TestRescueChannelsFromCorruptedFile baseline not empty")
+	req.NotEmpty(baseline, "expected channels from clean db")
 	baseMap := channelMap(baseline)
 
 	corrupted := make([]byte, len(clean))
@@ -73,12 +73,14 @@ func TestRescueChannelsFromCorruptedFile(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "channel.db")
-	require.NoError(t, os.WriteFile(path, corrupted, 0o600))
+	req.NoError(os.WriteFile(path, corrupted, 0o600),
+		"TestRescueChannelsFromCorruptedFile write corrupt db")
 	_, _, err := lnd.OpenDB(path, true)
 	req.Error(err, "expected corrupted db to fail opening")
 
 	rescued := rescueAll(t, corrupted)
-	req.Equal(len(baseline), len(rescued))
+	req.Equal(len(baseline), len(rescued),
+		"TestRescueChannelsFromCorruptedFile rescued count")
 
 	for _, ch := range rescued {
 		base, ok := baseMap[ch.FundingOutpoint.String()]
@@ -104,15 +106,16 @@ func TestLoadChannels(t *testing.T) {
 	dir := t.TempDir()
 
 	cleanPath := filepath.Join(dir, "clean.db")
-	req.NoError(os.WriteFile(cleanPath, clean, 0o600))
+	req.NoError(os.WriteFile(cleanPath, clean, 0o600),
+		"TestLoadChannels write clean copy")
 
 	chans, err := LoadChannels(cleanPath, false)
-	req.NoError(err)
+	req.NoError(err, "expected channels from clean db")
 	req.NotEmpty(chans, "TestLoadChannels clean fetch")
 
 	rescuedClean, err := LoadChannels(cleanPath, true)
-	req.NoError(err)
-	req.Len(rescuedClean, len(chans))
+	req.NoError(err, "TestLoadChannels rescue clean")
+	req.Len(rescuedClean, len(chans), "TestLoadChannels rescue size")
 
 	corrupted := make([]byte, len(clean))
 	copy(corrupted, clean)
@@ -121,12 +124,13 @@ func TestLoadChannels(t *testing.T) {
 	}
 
 	corruptPath := filepath.Join(dir, "corrupt.db")
-	req.NoError(os.WriteFile(corruptPath, corrupted, 0o600))
+	req.NoError(os.WriteFile(corruptPath, corrupted, 0o600),
+		"TestLoadChannels write corrupt copy")
 	_, err = LoadChannels(corruptPath, false)
 	req.Error(err, "expected error without rescue")
 
 	rescued, err := LoadChannels(corruptPath, true)
-	req.NoError(err)
+	req.NoError(err, "TestLoadChannels rescue corrupt")
 	req.NotEmpty(rescued, "expected rescued channels")
 }
 
@@ -141,16 +145,18 @@ func TestParseChanInfoAndCommit(t *testing.T) {
 	keyOffset := offsets[0]
 
 	info, err := parseChanInfo(bytes.NewReader(data), keyOffset, keyOffset+int64(len(infoKey)))
-	req.NoError(err)
-	req.NotEqual(wire.OutPoint{}, info.outpoint)
-	req.NoError(info.populateAuxData(bytes.NewReader(data), keyOffset))
+	req.NoError(err, "TestParseChanInfoAndCommit parse info")
+	req.NotEqual(wire.OutPoint{}, info.outpoint,
+		"TestParseChanInfoAndCommit funding outpoint")
+	req.NoError(info.populateAuxData(bytes.NewReader(data), keyOffset),
+		"TestParseChanInfoAndCommit populate aux")
 
 	commit, err := findCommitment(bytes.NewReader(data), keyOffset)
-	req.NoError(err)
-	req.NotNil(commit.Tx)
+	req.NoError(err, "TestParseChanInfoAndCommit find commitment")
+	req.NotNil(commit.Tx, "TestParseChanInfoAndCommit commitment tx")
 
 	_, err = rescueChannelAtOffset(bytes.NewReader(data), keyOffset)
-	req.NoError(err)
+	req.NoError(err, "TestParseChanInfoAndCommit rescue at offset")
 }
 
 // TestParseRevocationState ensures that the revocation state blob is decoded
@@ -170,20 +176,25 @@ func TestParseRevocationState(t *testing.T) {
 	store := shachain.NewRevocationStore()
 
 	secret, err := producer.AtIndex(0)
-	req.NoError(err)
-	req.NoError(store.AddNextEntry(secret))
+	req.NoError(err, "TestParseRevocationState producer index")
+	req.NoError(store.AddNextEntry(secret),
+		"TestParseRevocationState store add entry")
 
 	var buf bytes.Buffer
 	req.NoError(channeldb.WriteElements(
 		&buf, priv1.PubKey(), producer, store, priv2.PubKey(),
-	))
+	), "TestParseRevocationState write elements")
 
 	state, err := parseRevocationState(bytes.NewReader(buf.Bytes()), 0)
-	req.NoError(err)
-	req.True(pubKeyEqual(state.remoteCurrent, priv1.PubKey()))
-	req.True(pubKeyEqual(state.remoteNext, priv2.PubKey()))
-	req.True(bytes.Equal(producerBytes(t, state.producer), producerBytes(t, producer)))
-	req.True(bytes.Equal(storeBytes(t, state.store), storeBytes(t, store)))
+	req.NoError(err, "TestParseRevocationState parse state")
+	req.True(pubKeyEqual(state.remoteCurrent, priv1.PubKey()),
+		"TestParseRevocationState remote current")
+	req.True(pubKeyEqual(state.remoteNext, priv2.PubKey()),
+		"TestParseRevocationState remote next")
+	req.True(bytes.Equal(producerBytes(t, state.producer), producerBytes(t, producer)),
+		"TestParseRevocationState producer payload")
+	req.True(bytes.Equal(storeBytes(t, state.store), storeBytes(t, store)),
+		"TestParseRevocationState store payload")
 }
 
 func findKeyOffsets(data []byte, key []byte) []int64 {
@@ -221,7 +232,7 @@ func producerBytes(t *testing.T, p shachain.Producer) []byte {
 		return nil
 	}
 	var buf bytes.Buffer
-	require.NoError(t, p.Encode(&buf))
+	require.NoError(t, p.Encode(&buf), "producerBytes encode producer")
 	return buf.Bytes()
 }
 
@@ -231,6 +242,6 @@ func storeBytes(t *testing.T, s shachain.Store) []byte {
 		return nil
 	}
 	var buf bytes.Buffer
-	require.NoError(t, s.Encode(&buf))
+	require.NoError(t, s.Encode(&buf), "storeBytes encode store")
 	return buf.Bytes()
 }
