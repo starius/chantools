@@ -125,16 +125,12 @@ func (c *PendingChannelsChannel) AsSummaryEntry() *SummaryEntry {
 }
 
 type ChannelDBFile struct {
-	DB *channeldb.ChannelStateDB
+	Channels []*channeldb.OpenChannel
 }
 
 func (c *ChannelDBFile) AsSummaryEntries() ([]*SummaryEntry, error) {
-	channels, err := c.DB.FetchAllChannels()
-	if err != nil {
-		return nil, fmt.Errorf("error fetching channels: %w", err)
-	}
-	result := make([]*SummaryEntry, len(channels))
-	for idx, channel := range channels {
+	result := make([]*SummaryEntry, len(c.Channels))
+	for idx, channel := range c.Channels {
 		result[idx] = &SummaryEntry{
 			RemotePubkey: hex.EncodeToString(
 				channel.IdentityPub.SerializeCompressed(),

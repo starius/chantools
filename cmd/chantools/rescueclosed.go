@@ -15,6 +15,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/lightninglabs/chantools/dataformat"
 	"github.com/lightninglabs/chantools/lnd"
+	"github.com/lightninglabs/chantools/rescue"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/keychain"
@@ -126,22 +127,17 @@ func (c *rescueClosedCommand) Execute(_ *cobra.Command, _ []string) error {
 	// address and commit point?
 	switch {
 	case c.ChannelDB != "":
-		db, _, err := lnd.OpenDB(c.ChannelDB, true)
-		if err != nil {
-			return fmt.Errorf("error opening rescue DB: %w", err)
-		}
-
 		// Parse channel entries from any of the possible input files.
 		entries, err := c.inputs.parseInputType()
 		if err != nil {
 			return err
 		}
 
-		commitPoints, err := commitPointsFromDB(db.ChannelStateDB())
+		channels, err := rescue.LoadChannels(c.ChannelDB, true)
 		if err != nil {
-			return fmt.Errorf("error reading commit points from "+
-				"db: %w", err)
+			return fmt.Errorf("error loading channels: %w", err)
 		}
+		commitPoints := commitPointsFromChannels(channels)
 		return rescueClosedChannels(
 			c.NumKeys, extendedKey, entries, commitPoints,
 		)
@@ -191,15 +187,8 @@ func (c *rescueClosedCommand) Execute(_ *cobra.Command, _ []string) error {
 	}
 }
 
-func commitPointsFromDB(chanDb *channeldb.ChannelStateDB) ([]*btcec.PublicKey,
-	error) {
-
+func commitPointsFromChannels(channels []*channeldb.OpenChannel) []*btcec.PublicKey {
 	var result []*btcec.PublicKey
-
-	channels, err := chanDb.FetchAllChannels()
-	if err != nil {
-		return nil, err
-	}
 
 	// Try naive/lucky guess with information from channel DB.
 	for _, channel := range channels {
@@ -212,7 +201,7 @@ func commitPointsFromDB(chanDb *channeldb.ChannelStateDB) ([]*btcec.PublicKey,
 		}
 	}
 
-	return result, nil
+	return result
 }
 
 func commitPointsFromLogFile(lndLog string) ([]*btcec.PublicKey, error) {

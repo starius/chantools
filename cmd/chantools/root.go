@@ -17,6 +17,7 @@ import (
 	"github.com/lightninglabs/chantools/btc"
 	"github.com/lightninglabs/chantools/dataformat"
 	"github.com/lightninglabs/chantools/lnd"
+	"github.com/lightninglabs/chantools/rescue"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/chanbackup"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -297,12 +298,12 @@ func (f *inputFlags) parseInputType() ([]*dataformat.SummaryEntry, error) {
 		target = &dataformat.SummaryEntryFile{}
 
 	case f.FromChannelDB != "":
-		db, _, err := lnd.OpenDB(f.FromChannelDB, true)
+		channels, err := rescue.LoadChannels(f.FromChannelDB, true)
 		if err != nil {
-			return nil, fmt.Errorf("error opening channel DB: %w",
+			return nil, fmt.Errorf("error loading channels: %w",
 				err)
 		}
-		target = &dataformat.ChannelDBFile{DB: db.ChannelStateDB()}
+		target = &dataformat.ChannelDBFile{Channels: channels}
 		return target.AsSummaryEntries()
 
 	case f.FromChannelDump != "":

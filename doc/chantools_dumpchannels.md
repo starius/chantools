@@ -24,6 +24,7 @@ chantools dumpchannels \
       --channeldb string   lnd channel.db file to dump channels from
       --closed             dump closed channels instead of open
   -h, --help               help for dumpchannels
+      --recover            fall back to raw channel.db recovery when dumping open channels
       --pending            dump pending channels instead of open
       --waiting_close      dump waiting close channels instead of open
 ```
@@ -41,4 +42,3 @@ chantools dumpchannels \
 ### SEE ALSO
 
 * [chantools](chantools.md)	 - Chantools helps recover funds from lightning channels
-

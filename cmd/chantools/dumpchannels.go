@@ -7,6 +7,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/lightninglabs/chantools/dump"
 	"github.com/lightninglabs/chantools/lnd"
+	"github.com/lightninglabs/chantools/rescue"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,7 @@ type dumpChannelsCommand struct {
 	Closed       bool
 	Pending      bool
 	WaitingClose bool
+	Recover      bool
 
 	cmd *cobra.Command
 }
@@ -48,6 +50,11 @@ given lnd channel.db gile in a human readable format.`,
 		&cc.WaitingClose, "waiting_close", false, "dump waiting close "+
 			"channels instead of open",
 	)
+	cc.cmd.Flags().BoolVar(
+		&cc.Recover, "recover", false, "fall back to raw channel.db "+
+			"recovery when dumping open channels and the DB cannot be "+
+			"opened normally",
+	)
 
 	return cc.cmd
 }
@@ -57,38 +64,43 @@ func (c *dumpChannelsCommand) Execute(_ *cobra.Command, _ []string) error {
 	if c.ChannelDB == "" {
 		return errors.New("channel DB is required")
 	}
-	db, _, err := lnd.OpenDB(c.ChannelDB, true)
-	if err != nil {
-		return fmt.Errorf("error opening rescue DB: %w", err)
-	}
-	defer func() { _ = db.Close() }()
-
 	if (c.Closed && c.Pending) || (c.Closed && c.WaitingClose) ||
-		(c.Pending && c.WaitingClose) ||
-		(c.Closed && c.Pending && c.WaitingClose) {
+		(c.Pending && c.WaitingClose) {
 
 		return errors.New("can only specify one flag at a time")
 	}
 
-	if c.Closed {
-		return dumpClosedChannelInfo(db.ChannelStateDB())
-	}
-	if c.Pending {
-		return dumpPendingChannelInfo(db.ChannelStateDB())
-	}
-	if c.WaitingClose {
-		return dumpWaitingCloseChannelInfo(db.ChannelStateDB())
+	if c.Closed || c.Pending || c.WaitingClose {
+		if c.Recover {
+			return errors.New("--recover can only be used when " +
+				"dumping open channels")
+		}
+
+		db, _, err := lnd.OpenDB(c.ChannelDB, true)
+		if err != nil {
+			return fmt.Errorf("error opening channel DB: %w", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		switch {
+		case c.Closed:
+			return dumpClosedChannelInfo(db.ChannelStateDB())
+		case c.Pending:
+			return dumpPendingChannelInfo(db.ChannelStateDB())
+		case c.WaitingClose:
+			return dumpWaitingCloseChannelInfo(db.ChannelStateDB())
+		}
 	}
 
-	return dumpOpenChannelInfo(db.ChannelStateDB())
-}
-
-func dumpOpenChannelInfo(chanDb *channeldb.ChannelStateDB) error {
-	channels, err := chanDb.FetchAllChannels()
+	channels, err := rescue.LoadChannels(c.ChannelDB, c.Recover)
 	if err != nil {
 		return err
 	}
 
+	return dumpOpenChannelInfo(channels)
+}
+
+func dumpOpenChannelInfo(channels []*channeldb.OpenChannel) error {
 	dumpChannels, err := dump.OpenChannelDump(channels, chainParams)
 	if err != nil {
 		return fmt.Errorf("error converting to dump format: %w", err)
