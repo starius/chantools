@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/lightninglabs/chantools/dataformat"
 	"github.com/lightninglabs/chantools/lnd"
+	"github.com/lightninglabs/chantools/rescue"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/spf13/cobra"
@@ -37,6 +39,7 @@ type forceCloseCommand struct {
 	APIURL    string
 	ChannelDB string
 	Publish   bool
+	Recover   bool
 
 	rootKey *rootKey
 	inputs  *inputFlags
@@ -68,6 +71,10 @@ func newForceCloseCommand() *cobra.Command {
 		&cc.Publish, "publish", false, "publish force-closing TX to "+
 			"the chain API instead of just printing the TX",
 	)
+	cc.cmd.Flags().BoolVar(
+		&cc.Recover, "recover", false, "recover channels directly "+
+			"from a raw channel.db without opening it with lnd",
+	)
 
 	cc.rootKey = newRootKey(cc.cmd, "decrypting the backup")
 	cc.inputs = newInputFlags(cc.cmd)
@@ -85,29 +92,46 @@ func (c *forceCloseCommand) Execute(_ *cobra.Command, _ []string) error {
 	if c.ChannelDB == "" {
 		return errors.New("rescue DB is required")
 	}
-	db, _, err := lnd.OpenDB(c.ChannelDB, true)
-	if err != nil {
-		return fmt.Errorf("error opening rescue DB: %w", err)
-	}
 
 	// Parse channel entries from any of the possible input files.
 	entries, err := c.inputs.parseInputType()
 	if err != nil {
 		return err
 	}
+
+	var channels []*channeldb.OpenChannel
+	if c.Recover {
+		channels, err = c.recoverChannels(entries)
+		if err != nil {
+			return err
+		}
+	} else {
+		db, _, err := lnd.OpenDB(c.ChannelDB, true)
+		if err != nil {
+			return fmt.Errorf("error opening rescue DB: %w", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		channels, err = db.ChannelStateDB().FetchAllChannels()
+		if err != nil {
+			return fmt.Errorf("failed to fetch channels, try "+
+				"--recover: %w", err)
+		}
+	}
+
 	return forceCloseChannels(
-		c.APIURL, extendedKey, entries, db.ChannelStateDB(), c.Publish,
+		c.APIURL, extendedKey, entries, channels, c.Publish,
 	)
 }
 
 func forceCloseChannels(apiURL string, extendedKey *hdkeychain.ExtendedKey,
-	entries []*dataformat.SummaryEntry, chanDb *channeldb.ChannelStateDB,
+	entries []*dataformat.SummaryEntry, channels []*channeldb.OpenChannel,
 	publish bool) error {
 
-	channels, err := chanDb.FetchAllChannels()
-	if err != nil {
-		return err
+	if len(channels) == 0 {
+		return errors.New("no channels available to force close")
 	}
+
 	api := newExplorerAPI(apiURL)
 	signer := &lnd.Signer{
 		ExtendedKey: extendedKey,
@@ -234,4 +258,46 @@ func forceCloseChannels(apiURL string, extendedKey *hdkeychain.ExtendedKey,
 		time.Now().Format("2006-01-02-15-04-05"))
 	log.Infof("Writing result to %s", fileName)
 	return os.WriteFile(fileName, summaryBytes, 0644)
+}
+
+func (c *forceCloseCommand) recoverChannels(
+	entries []*dataformat.SummaryEntry) ([]*channeldb.OpenChannel, error) {
+
+	file, err := os.Open(c.ChannelDB)
+	if err != nil {
+		return nil, fmt.Errorf("error opening channel DB for recovery: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	recovered, err := rescue.RecoverChannels(file)
+	if err != nil {
+		return nil, fmt.Errorf("error recovering channels: %w", err)
+	}
+
+	points := make(map[string]struct{})
+	for _, entry := range entries {
+		point := strings.TrimSpace(entry.ChannelPoint)
+		if point == "" {
+			continue
+		}
+		points[point] = struct{}{}
+	}
+	if len(points) == 0 {
+		return nil, errors.New("recover requires channel points in the input data")
+	}
+
+	var filtered []*channeldb.OpenChannel
+	for _, channel := range recovered {
+		if _, ok := points[channel.FundingOutpoint.String()]; ok {
+			filtered = append(filtered, channel)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("no recovered channels matched provided channel points")
+	}
+
+	log.Infof("Recovered %d channel(s) matching provided channel points",
+		len(filtered))
+
+	return filtered, nil
 }
