@@ -108,6 +108,9 @@ func setChannelStatus(channel *channeldb.OpenChannel, status channeldb.ChannelSt
 	*typed = status
 }
 
+// scanForChannels iterates over the raw DB bytes by sliding a fixed-size
+// window, looking for occurrences of chan-info-key, and attempts to hydrate
+// OpenChannel instances from each hit.
 func scanForChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 	key := []byte(infoKey)
 	buf := make([]byte, chunkSize+len(key)-1)
@@ -117,6 +120,8 @@ func scanForChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 	var offset int64
 
 	for {
+		// Carry the tail bytes from the previous chunk so matches crossing the
+		// chunk boundary remain visible in this iteration.
 		copy(buf[:tailLen], tail[:tailLen])
 		n, err := r.ReadAt(buf[tailLen:tailLen+chunkSize], offset)
 		total := tailLen + n
@@ -162,6 +167,9 @@ func scanForChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 	return channels, nil
 }
 
+// rescueChannelAtOffset parses the chan-info-key payload located at the given
+// offset and assembles an OpenChannel instance by pulling in the accompanying
+// commitment, revocation, and aux data blobs.
 func rescueChannelAtOffset(r io.ReaderAt, keyOffset int64) (*channeldb.OpenChannel, error) {
 	dataOffset := keyOffset + int64(len(infoKey))
 	info, err := parseChanInfo(r, keyOffset, dataOffset)
@@ -169,11 +177,13 @@ func rescueChannelAtOffset(r io.ReaderAt, keyOffset int64) (*channeldb.OpenChann
 		return nil, err
 	}
 
+	// Attach the commitment state that sits close to the chan-info entry.
 	commit, err := findCommitment(r, keyOffset)
 	if err != nil {
 		return nil, err
 	}
 
+	// Decode auxiliary blobs such as revocation state and confirmed SCID.
 	if err := info.populateAuxData(r, keyOffset); err != nil {
 		return nil, err
 	}
@@ -228,6 +238,8 @@ type commitInfo struct {
 	CommitSig     []byte
 }
 
+// parseChanInfo reads the serialized channel header stored under
+// chan-info-key and extracts all static fields needed to build an OpenChannel.
 func parseChanInfo(r io.ReaderAt, keyOffset, dataOffset int64) (*chanInfo, error) {
 	buf := make([]byte, headerReadLimit)
 	n, err := r.ReadAt(buf, dataOffset)
@@ -322,6 +334,8 @@ func parseChanInfo(r io.ReaderAt, keyOffset, dataOffset int64) (*chanInfo, error
 	info.totalMsatReceived = lnwire.MilliSatoshi(recv)
 
 	if shouldReadFundingTx(info) {
+		// Only single-funder initiators persist the full funding tx. We
+		// conditionally deserialize the blob to keep parsing aligned.
 		tx := wire.NewMsgTx(2)
 		if err := tx.Deserialize(reader); err != nil {
 			return nil, err
@@ -349,6 +363,9 @@ func parseChanInfo(r io.ReaderAt, keyOffset, dataOffset int64) (*chanInfo, error
 	return info, nil
 }
 
+// decodeAuxData parses the TLV-encoded auxiliary channel data (revocation key
+// locator, initial balances, real SCID, etc.) that lives beyond the fixed
+// header. The method only extracts the fields we need for reconstruction.
 func (c *chanInfo) decodeAuxData(r *bytes.Reader) error {
 	const maxAuxType = 8
 
@@ -423,12 +440,16 @@ func (c *chanInfo) decodeAuxData(r *bytes.Reader) error {
 	return nil
 }
 
+// auxSentinels mark keys that belong to other channel buckets. They are used
+// as hard boundaries when trimming slack space from the aux payload.
 var auxSentinels = [][]byte{
 	[]byte("revocation-state-key"),
 	[]byte("chan-commitment-key"),
 	[]byte("commit-diff-key"),
 }
 
+// trimAuxData removes trailing zero padding from the aux region and cuts off
+// the data once a known sibling key is encountered.
 func trimAuxData(data []byte) []byte {
 	if len(data) == 0 {
 		return data
@@ -520,6 +541,9 @@ func (c *chanInfo) buildChannel(commit *commitInfo) *channeldb.OpenChannel {
 	return channel
 }
 
+// shouldReadFundingTx returns true when the serialized channel info is
+// expected to contain the full funding transaction blob (single funder,
+// initiator, and HasFundingTx flag set).
 func shouldReadFundingTx(info *chanInfo) bool {
 	if !info.chanType.IsSingleFunder() {
 		return false
@@ -533,6 +557,8 @@ func shouldReadFundingTx(info *chanInfo) bool {
 	return true
 }
 
+// frozenHeight looks up the frozen-chans sibling entry near the anchor offset
+// to recover the stored thaw height for leased channels.
 func frozenHeight(r io.ReaderAt, anchor int64) (uint32, error) {
 	data, err := readSibling(r, anchor, "frozen-chans", 4)
 	if err != nil {
@@ -541,6 +567,8 @@ func frozenHeight(r io.ReaderAt, anchor int64) (uint32, error) {
 	return binary.BigEndian.Uint32(data), nil
 }
 
+// readSibling scans a bounded window around the anchor and returns the value
+// for another bucket key (for example frozen-chans) when present.
 func readSibling(r io.ReaderAt, anchor int64, key string, size int) ([]byte, error) {
 	start := anchor - siblingSearchRadius
 	if start < 0 {
@@ -566,6 +594,8 @@ func readSibling(r io.ReaderAt, anchor int64, key string, size int) ([]byte, err
 	return out, nil
 }
 
+// findCommitment searches within commitSearchRadius of the anchor for the
+// local commitment blob and, if found, parses it into commitInfo.
 func findCommitment(r io.ReaderAt, anchor int64) (*commitInfo, error) {
 	keyBytes := append([]byte(commitKey), byte(0x00))
 	radius := int64(commitSearchRadius)
@@ -590,6 +620,8 @@ func findCommitment(r io.ReaderAt, anchor int64) (*commitInfo, error) {
 	return parseCommitment(r, dataOffset)
 }
 
+// parseCommitment deserializes the commitment entry located at the supplied
+// offset and returns the height, balances, tx, and signature information.
 func parseCommitment(r io.ReaderAt, offset int64) (*commitInfo, error) {
 	buf := make([]byte, commitmentReadLimit)
 	n, err := r.ReadAt(buf, offset)
@@ -649,6 +681,8 @@ type revocationState struct {
 	store         shachain.Store
 }
 
+// findRevocationState scans for the revocation-state-key entry near the
+// provided anchor and parses its payload if present.
 func findRevocationState(r io.ReaderAt, anchor int64) (*revocationState, error) {
 	key := []byte("revocation-state-key")
 	radius := int64(commitSearchRadius)
@@ -672,6 +706,8 @@ func findRevocationState(r io.ReaderAt, anchor int64) (*revocationState, error) 
 	return parseRevocationState(r, dataOffset)
 }
 
+// parseRevocationState converts the revocation-state-key payload into the
+// public keys, producer, and store structures needed for channel recovery.
 func parseRevocationState(r io.ReaderAt, offset int64) (*revocationState, error) {
 	buf := make([]byte, 1<<16)
 	n, err := r.ReadAt(buf, offset)
@@ -699,6 +735,8 @@ func parseRevocationState(r io.ReaderAt, offset int64) (*revocationState, error)
 	return state, nil
 }
 
+// readChannelConfig deserializes the channel config struct (dust limits,
+// reserves, base points, etc.) from the provided reader.
 func readChannelConfig(r io.Reader) (channeldb.ChannelConfig, error) {
 	var cfg channeldb.ChannelConfig
 	var err error
@@ -740,6 +778,8 @@ func readChannelConfig(r io.Reader) (channeldb.ChannelConfig, error) {
 	return cfg, nil
 }
 
+// readKeyDesc reads a KeyDescriptor, including the optional public key, from
+// the serialized channel config stream.
 func readKeyDesc(r io.Reader) (keychain.KeyDescriptor, error) {
 	var desc keychain.KeyDescriptor
 	fam, err := readUint32(r)
@@ -772,11 +812,13 @@ func readKeyDesc(r io.Reader) (keychain.KeyDescriptor, error) {
 	return desc, nil
 }
 
+// readInto copies exactly len(dst) bytes from the reader into dst.
 func readInto(r io.Reader, dst []byte) error {
 	_, err := io.ReadFull(r, dst)
 	return err
 }
 
+// readBool reads a single byte and interprets it as a boolean value.
 func readBool(r io.Reader) (bool, error) {
 	var b [1]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {
@@ -792,6 +834,7 @@ func readBool(r io.Reader) (bool, error) {
 	}
 }
 
+// readUint16 reads a big-endian uint16 from the reader.
 func readUint16(r io.Reader) (uint16, error) {
 	var b [2]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {
@@ -800,6 +843,7 @@ func readUint16(r io.Reader) (uint16, error) {
 	return binary.BigEndian.Uint16(b[:]), nil
 }
 
+// readUint32 reads a big-endian uint32 from the reader.
 func readUint32(r io.Reader) (uint32, error) {
 	var b [4]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {
@@ -808,6 +852,7 @@ func readUint32(r io.Reader) (uint32, error) {
 	return binary.BigEndian.Uint32(b[:]), nil
 }
 
+// readUint64 reads a big-endian uint64 from the reader.
 func readUint64(r io.Reader) (uint64, error) {
 	var b [8]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {
@@ -816,6 +861,8 @@ func readUint64(r io.Reader) (uint64, error) {
 	return binary.BigEndian.Uint64(b[:]), nil
 }
 
+// readVarInt parses the compact uint encoding used throughout the channel
+// serialization.
 func readVarInt(r io.Reader) (uint64, error) {
 	var buf [8]byte
 	if _, err := io.ReadFull(r, buf[:1]); err != nil {
@@ -842,6 +889,8 @@ func readVarInt(r io.Reader) (uint64, error) {
 	}
 }
 
+// readVarBytes reads a varint length prefix followed by the payload, enforcing
+// a caller supplied maximum size.
 func readVarBytes(r io.Reader, max uint32) ([]byte, error) {
 	length, err := readVarInt(r)
 	if err != nil {
@@ -857,6 +906,7 @@ func readVarBytes(r io.Reader, max uint32) ([]byte, error) {
 	return out, nil
 }
 
+// readAmt reads a satoshi-denominated amount.
 func readAmt(r io.Reader) (btcutil.Amount, error) {
 	val, err := readUint64(r)
 	if err != nil {
@@ -865,6 +915,7 @@ func readAmt(r io.Reader) (btcutil.Amount, error) {
 	return btcutil.Amount(val), nil
 }
 
+// readMsat reads a milli-satoshi amount.
 func readMsat(r io.Reader) (lnwire.MilliSatoshi, error) {
 	val, err := readUint64(r)
 	if err != nil {

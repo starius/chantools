@@ -17,6 +17,7 @@ import (
 	"github.com/lightningnetwork/lnd/shachain"
 )
 
+// loadTestDB reads the canned channel.db fixture from disk for use in tests.
 func loadTestDB(t *testing.T) []byte {
 	t.Helper()
 	path := testDBPath(t)
@@ -27,6 +28,7 @@ func loadTestDB(t *testing.T) []byte {
 	return data
 }
 
+// testDBPath returns the absolute path to the test channel.db file.
 func testDBPath(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -39,6 +41,7 @@ func testDBPath(t *testing.T) string {
 	)
 }
 
+// rescueAll is a helper that runs RescueChannels and fails the test on error.
 func rescueAll(t *testing.T, data []byte) []*channeldb.OpenChannel {
 	t.Helper()
 	chans, err := RescueChannels(bytes.NewReader(data))
@@ -48,6 +51,7 @@ func rescueAll(t *testing.T, data []byte) []*channeldb.OpenChannel {
 	return chans
 }
 
+// channelMap makes it easy to look up channels by their funding outpoint.
 func channelMap(chans []*channeldb.OpenChannel) map[string]*channeldb.OpenChannel {
 	out := make(map[string]*channeldb.OpenChannel)
 	for _, c := range chans {
@@ -56,6 +60,8 @@ func channelMap(chans []*channeldb.OpenChannel) map[string]*channeldb.OpenChanne
 	return out
 }
 
+// TestRescueChannelsFromCorruptedFile asserts that RescueChannels can rebuild
+// every entry even when the beginning of the DB file is clobbered.
 func TestRescueChannelsFromCorruptedFile(t *testing.T) {
 	clean := loadTestDB(t)
 	baseline := rescueAll(t, clean)
@@ -119,6 +125,8 @@ func TestRescueChannelsFromCorruptedFile(t *testing.T) {
 	}
 }
 
+// TestLoadChannels covers both the normal channeldb load path and the rescue
+// fallback when the file cannot be opened.
 func TestLoadChannels(t *testing.T) {
 	clean := loadTestDB(t)
 	dir := t.TempDir()
@@ -159,6 +167,8 @@ func TestLoadChannels(t *testing.T) {
 	}
 }
 
+// TestParseChanInfoAndCommit ensures we can parse the chan-info and commitment
+// payloads at a given offset without error.
 func TestParseChanInfoAndCommit(t *testing.T) {
 	data := loadTestDB(t)
 	offsets := findKeyOffsets(data, []byte(infoKey))
@@ -193,6 +203,8 @@ func TestParseChanInfoAndCommit(t *testing.T) {
 	}
 }
 
+// TestParseRevocationState ensures that the revocation state blob is decoded
+// into the expected keys, producer, and store.
 func TestParseRevocationState(t *testing.T) {
 	priv1, err := btcec.NewPrivateKey()
 	if err != nil {
