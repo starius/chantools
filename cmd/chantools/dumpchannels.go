@@ -52,7 +52,7 @@ given lnd channel.db gile in a human readable format.`,
 	)
 	cc.cmd.Flags().BoolVar(
 		&cc.Rescue, "rescue", false, "fall back to raw channel.db "+
-			"recovery when dumping open channels and the DB "+
+			"rescue when dumping open channels and the DB "+
 			"cannot be opened normally",
 	)
 

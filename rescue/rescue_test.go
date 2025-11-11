@@ -43,7 +43,7 @@ func rescueAll(t *testing.T, data []byte) []*channeldb.OpenChannel {
 	t.Helper()
 	chans, err := RescueChannels(bytes.NewReader(data))
 	if err != nil {
-		t.Fatalf("recover channels: %v", err)
+		t.Fatalf("rescue channels: %v", err)
 	}
 	return chans
 }
@@ -79,12 +79,12 @@ func TestRescueChannelsFromCorruptedFile(t *testing.T) {
 		t.Fatal("expected corrupted db to fail opening")
 	}
 
-	recovered := rescueAll(t, corrupted)
-	if len(recovered) != len(baseline) {
-		t.Fatalf("expected %d channels, got %d", len(baseline), len(recovered))
+	rescued := rescueAll(t, corrupted)
+	if len(rescued) != len(baseline) {
+		t.Fatalf("expected %d channels, got %d", len(baseline), len(rescued))
 	}
 
-	for _, ch := range recovered {
+	for _, ch := range rescued {
 		base, ok := baseMap[ch.FundingOutpoint.String()]
 		if !ok {
 			t.Fatalf("unexpected channel %s", ch.FundingOutpoint)
@@ -150,12 +150,12 @@ func TestLoadChannels(t *testing.T) {
 		t.Fatal("expected error without rescue")
 	}
 
-	recovered, err := LoadChannels(corruptPath, true)
+	rescued, err := LoadChannels(corruptPath, true)
 	if err != nil {
 		t.Fatalf("load channels with rescue: %v", err)
 	}
-	if len(recovered) == 0 {
-		t.Fatal("expected recovered channels")
+	if len(rescued) == 0 {
+		t.Fatal("expected rescued channels")
 	}
 }
 
@@ -188,8 +188,8 @@ func TestParseChanInfoAndCommit(t *testing.T) {
 		t.Fatal("expected commitment tx")
 	}
 
-	if _, err := recoverAtOffset(bytes.NewReader(data), keyOffset); err != nil {
-		t.Fatalf("recover at offset: %v", err)
+	if _, err := rescueChannelAtOffset(bytes.NewReader(data), keyOffset); err != nil {
+		t.Fatalf("rescue at offset: %v", err)
 	}
 }
 

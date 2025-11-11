@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	errChannelNotFound    = errors.New("no channels recovered")
+	errChannelNotFound    = errors.New("no channels rescued")
 	errRevocationNotFound = errors.New("revocation state not found")
 )
 
@@ -45,7 +45,7 @@ const (
 //
 // Channels that have already been moved to the closed/historical buckets are
 // not surfaced, because their metadata is stored elsewhere in channel.db.
-// The reader must implement io.ReaderAt so random access near recovered keys
+// The reader must implement io.ReaderAt so random access near rescued keys
 // is possible.
 func RescueChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 	matches, err := scanForChannels(r)
@@ -82,16 +82,16 @@ func LoadChannels(dbPath string, rescue bool) ([]*channeldb.OpenChannel, error) 
 	}
 	defer func() { _ = file.Close() }()
 
-	recovered, recErr := RescueChannels(file)
+	rescued, recErr := RescueChannels(file)
 	if recErr != nil {
 		return nil, recErr
 	}
 
-	return recovered, nil
+	return rescued, nil
 }
 
 // setChannelStatus mutates the private chanStatus field on channeldb.OpenChannel
-// using reflection+unsafe so recovered channels retain their waiting-close
+// using reflection+unsafe so rescued channels retain their waiting-close
 // metadata for in-memory filtering. This avoids the need for a live DB handle.
 func setChannelStatus(channel *channeldb.OpenChannel, status channeldb.ChannelStatus) {
 	if channel == nil {
@@ -132,7 +132,7 @@ func scanForChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 				}
 
 				absolute := base + int64(searchFrom+idx)
-				channel, err := recoverAtOffset(r, absolute)
+				channel, err := rescueChannelAtOffset(r, absolute)
 				if err == nil {
 					channels = append(channels, channel)
 				}
@@ -162,7 +162,7 @@ func scanForChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 	return channels, nil
 }
 
-func recoverAtOffset(r io.ReaderAt, keyOffset int64) (*channeldb.OpenChannel, error) {
+func rescueChannelAtOffset(r io.ReaderAt, keyOffset int64) (*channeldb.OpenChannel, error) {
 	dataOffset := keyOffset + int64(len(infoKey))
 	info, err := parseChanInfo(r, keyOffset, dataOffset)
 	if err != nil {
