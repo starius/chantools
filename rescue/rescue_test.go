@@ -271,10 +271,12 @@ func findKeyOffsets(data []byte, key []byte) []int64 {
 	return offsets
 }
 
+// locatorsEqual compares two KeyLocator values for equality.
 func locatorsEqual(a, b keychain.KeyLocator) bool {
 	return a.Family == b.Family && a.Index == b.Index
 }
 
+// pubKeyEqual checks whether two secp256k1 public keys are both nil or equal.
 func pubKeyEqual(a, b *btcec.PublicKey) bool {
 	switch {
 	case a == nil && b == nil:
@@ -288,6 +290,8 @@ func pubKeyEqual(a, b *btcec.PublicKey) bool {
 	}
 }
 
+// producerBytes serializes a shachain producer for byte-wise comparisons in
+// tests.
 func producerBytes(t *testing.T, p shachain.Producer) []byte {
 	t.Helper()
 
@@ -301,6 +305,7 @@ func producerBytes(t *testing.T, p shachain.Producer) []byte {
 	return buf.Bytes()
 }
 
+// storeBytes serializes a shachain store for byte-wise comparisons in tests.
 func storeBytes(t *testing.T, s shachain.Store) []byte {
 	t.Helper()
 
