@@ -100,35 +100,34 @@ func RescueChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 }
 
 // LoadChannels attempts to read all open channels from the given channel DB
-// path. If the Bolt database can be opened, it simply returns the channels
-// fetched through channeldb. If the DB cannot be opened and rescue mode is
-// enabled, the function falls back to scanning the raw file and rebuilding the
-// channels from disk. When rescue is false, the original open error is
-// returned.
-func LoadChannels(dbPath string, rescue bool) ([]*channeldb.OpenChannel, error) {
+// path. It always tries to open the Bolt database first. When useRescue is
+// true, it falls back to rescanning the raw DB if the Bolt open fails, the
+// fetch errors, or zero channels are returned.
+func LoadChannels(dbPath string, useRescue bool) ([]*channeldb.OpenChannel, error) {
 	channelDB, _, err := lnd.OpenDB(dbPath, true)
 	if err == nil {
-		defer func() { _ = channelDB.Close() }()
+		channels, fetchErr := channelDB.ChannelStateDB().FetchAllChannels()
+		_ = channelDB.Close()
 
-		return channelDB.ChannelStateDB().FetchAllChannels()
-	}
-	if !rescue {
+		switch {
+		case fetchErr != nil:
+			if !useRescue {
+				return nil, fetchErr
+			}
+
+		case len(channels) > 0:
+			return channels, nil
+
+		default:
+			if !useRescue {
+				return channels, nil
+			}
+		}
+	} else if !useRescue {
 		return nil, fmt.Errorf("error opening channel DB: %w", err)
 	}
 
-	file, fileErr := os.Open(dbPath)
-	if fileErr != nil {
-		return nil, fmt.Errorf("error opening channel DB for rescue: %w",
-			fileErr)
-	}
-	defer func() { _ = file.Close() }()
-
-	rescued, recErr := RescueChannels(file)
-	if recErr != nil {
-		return nil, recErr
-	}
-
-	return rescued, nil
+	return loadChannelsFromRaw(dbPath)
 }
 
 // setChannelStatus mutates the private chanStatus field on channeldb.OpenChannel
@@ -147,6 +146,20 @@ func setChannelStatus(channel *channeldb.OpenChannel, status channeldb.ChannelSt
 	ptr := unsafe.Pointer(field.UnsafeAddr())
 	typed := (*channeldb.ChannelStatus)(ptr)
 	*typed = status
+}
+
+// loadChannelsFromRaw opens the DB file and runs the raw rescue pipeline.
+func loadChannelsFromRaw(dbPath string) ([]*channeldb.OpenChannel, error) {
+	file, err := os.Open(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("error opening channel DB for rescue: %w",
+			err)
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	return RescueChannels(file)
 }
 
 // scanForChannels iterates over the raw DB bytes by sliding a fixed-size

@@ -144,6 +144,15 @@ func TestLoadChannels(t *testing.T) {
 		t.Fatal("expected channels from clean db")
 	}
 
+	rescuedClean, err := LoadChannels(cleanPath, true)
+	if err != nil {
+		t.Fatalf("load clean channels with rescue: %v", err)
+	}
+	if len(rescuedClean) != len(chans) {
+		t.Fatalf("expected %d rescued clean channels, got %d",
+			len(chans), len(rescuedClean))
+	}
+
 	corrupted := make([]byte, len(clean))
 	copy(corrupted, clean)
 	for i := 0; i < 8192 && i < len(corrupted); i++ {
