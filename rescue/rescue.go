@@ -22,18 +22,59 @@ import (
 )
 
 var (
-	errChannelNotFound    = errors.New("no channels rescued")
+	// errChannelNotFound signals that no chan-info-key entries were found.
+	errChannelNotFound = errors.New("no channels rescued")
+
+	// errRevocationNotFound indicates the revocation blob is missing near
+	// a chan-info-key entry.
 	errRevocationNotFound = errors.New("revocation state not found")
 )
 
 const (
-	infoKey             = "chan-info-key"
-	commitKey           = "chan-commitment-key"
-	chunkSize           = 4 << 20
-	commitSearchRadius  = 1 << 15
+	// infoKey is the Bolt bucket key that stores the static channel header.
+	infoKey = "chan-info-key"
+
+	// commitKey is the Bolt key that stores commitment snapshots.
+	commitKey = "chan-commitment-key"
+
+	// chunkSize controls how many bytes are scanned at once while looking
+	// for chan-info-key occurrences.
+	chunkSize = 4 << 20
+
+	// commitSearchRadius is the byte distance to scan around a chan-info
+	// hit to locate adjacent commitment or revocation blobs.
+	commitSearchRadius = 1 << 15
+
+	// siblingSearchRadius bounds the window when looking for nearby keys
+	// such as frozen-chans.
 	siblingSearchRadius = 4 << 10
-	headerReadLimit     = 1 << 20
+
+	// headerReadLimit caps how many bytes are read when decoding the
+	// chan-info payload.
+	headerReadLimit = 1 << 20
+
+	// commitmentReadLimit caps how many bytes are read when decoding the
+	// commitment payload.
 	commitmentReadLimit = 1 << 20
+
+	// commitSigMaxSize mirrors the maximum variable length signature size
+	// accepted by channeldb when encoding commitments.
+	commitSigMaxSize = 66000
+)
+
+// open channel auxiliary TLV types copied from lnd/channeldb/channel.go.
+const (
+	openChanTlvTypeRevokeKeyLoc         = 1
+	openChanTlvTypeInitialLocalBalance  = 2
+	openChanTlvTypeInitialRemoteBalance = 3
+	openChanTlvTypeRealScid             = 4
+	openChanTlvTypeMemo                 = 5
+	openChanTlvTypeTapscriptRoot        = 6
+	openChanTlvTypeCustomBlob           = 7
+	openChanTlvTypeConfirmationHeight   = 8
+
+	// openChanAuxMaxType is the highest TLV type we currently expect.
+	openChanAuxMaxType = openChanTlvTypeConfirmationHeight
 )
 
 // RescueChannels scans a raw channel.db byte stream and rebuilds every entry
@@ -191,51 +232,117 @@ func rescueChannelAtOffset(r io.ReaderAt, keyOffset int64) (*channeldb.OpenChann
 	return info.buildChannel(commit), nil
 }
 
+// chanInfo mirrors the fixed channel header stored under chan-info-key and
+// holds the additional data we glean from nearby blobs.
 type chanInfo struct {
-	keyOffset  int64
+	// keyOffset is the byte offset at which chan-info-key was located.
+	keyOffset int64
+
+	// dataOffset is the start of the serialized chan-info payload.
 	dataOffset int64
 
-	chanType  channeldb.ChannelType
+	// chanType records the negotiated channel type bits.
+	chanType channeldb.ChannelType
+
+	// chainHash identifies the chain the channel belongs to.
 	chainHash chainhash.Hash
-	outpoint  wire.OutPoint
-	shortID   lnwire.ShortChannelID
 
-	isPending   bool
+	// outpoint is the funding outpoint.
+	outpoint wire.OutPoint
+
+	// shortID is the alias ShortChannelID stored in the header.
+	shortID lnwire.ShortChannelID
+
+	// isPending indicates whether the channel's funding tx is confirmed.
+	isPending bool
+
+	// isInitiator records whether we initiated channel funding.
 	isInitiator bool
-	status      channeldb.ChannelStatus
 
-	fundingHeight  uint32
-	numConfs       uint16
-	channelFlags   lnwire.FundingFlag
+	// status captures ChanStatus bits (waiting close, etc.).
+	status channeldb.ChannelStatus
+
+	// fundingHeight is the block height used for the short ID fallback.
+	fundingHeight uint32
+
+	// numConfs is the required confirmation count.
+	numConfs uint16
+
+	// channelFlags are the lnwire FundingFlags saved during open.
+	channelFlags lnwire.FundingFlag
+
+	// remoteIdentity is the remote party's identity pubkey.
 	remoteIdentity *btcec.PublicKey
 
-	capacity          btcutil.Amount
-	totalMsatSent     lnwire.MilliSatoshi
+	// capacity is the channel capacity in satoshis.
+	capacity btcutil.Amount
+
+	// totalMsatSent tracks historical HTLC volume sent.
+	totalMsatSent lnwire.MilliSatoshi
+
+	// totalMsatReceived tracks historical volume received.
 	totalMsatReceived lnwire.MilliSatoshi
 
-	localCfg  channeldb.ChannelConfig
+	// localCfg is our channel configuration.
+	localCfg channeldb.ChannelConfig
+
+	// remoteCfg is the peer's channel configuration.
 	remoteCfg channeldb.ChannelConfig
 
-	revocationLocator    keychain.KeyLocator
-	confirmedScid        lnwire.ShortChannelID
-	hasConfirmed         bool
-	confirmationHeight   uint32
-	initialLocalBalance  lnwire.MilliSatoshi
+	// revocationLocator tells us how to derive the shachain root.
+	revocationLocator keychain.KeyLocator
+
+	// confirmedScid carries the confirmed SCID for zero-conf channels.
+	confirmedScid lnwire.ShortChannelID
+
+	// hasConfirmed marks whether confirmedScid is populated.
+	hasConfirmed bool
+
+	// confirmationHeight stores the block height recorded in aux data.
+	confirmationHeight uint32
+
+	// initialLocalBalance is the starting balance we held at open.
+	initialLocalBalance lnwire.MilliSatoshi
+
+	// initialRemoteBalance is the peer's starting balance.
 	initialRemoteBalance lnwire.MilliSatoshi
-	leaseExpiry          uint32
-	remoteCurrent        *btcec.PublicKey
-	remoteNext           *btcec.PublicKey
-	revocationProd       shachain.Producer
-	revocationStore      shachain.Store
+
+	// leaseExpiry holds the CLTV thaw height for leased channels.
+	leaseExpiry uint32
+
+	// remoteCurrent is the current revocation public key.
+	remoteCurrent *btcec.PublicKey
+
+	// remoteNext is the next revocation public key.
+	remoteNext *btcec.PublicKey
+
+	// revocationProd rebuilds the peer's shachain producer.
+	revocationProd shachain.Producer
+
+	// revocationStore rebuilds the peer's shachain store.
+	revocationStore shachain.Store
 }
 
+// commitInfo contains the subset of commitment data needed to rebuild the
+// ChannelCommitment struct.
 type commitInfo struct {
-	CommitHeight  uint64
-	LocalBalance  uint64
+	// CommitHeight is the per-channel commitment number.
+	CommitHeight uint64
+
+	// LocalBalance is the local balance in msat.
+	LocalBalance uint64
+
+	// RemoteBalance is the remote balance in msat.
 	RemoteBalance uint64
-	CommitFee     uint64
-	Tx            *wire.MsgTx
-	CommitSig     []byte
+
+	// CommitFee is the fee in satoshis.
+	CommitFee uint64
+
+	// Tx is the raw commitment transaction.
+	Tx *wire.MsgTx
+
+	// CommitSig is the remote-signed DER signature for Tx.
+	CommitSig []byte
 }
 
 // parseChanInfo reads the serialized channel header stored under
@@ -377,7 +484,7 @@ func (c *chanInfo) decodeAuxData(r *bytes.Reader) error {
 			}
 			return err
 		}
-		if t == 0 || t > maxAuxType {
+		if t == 0 || t > openChanAuxMaxType {
 			break
 		}
 
@@ -395,26 +502,26 @@ func (c *chanInfo) decodeAuxData(r *bytes.Reader) error {
 		}
 
 		switch t {
-		case 1:
+		case openChanTlvTypeRevokeKeyLoc:
 			if len(field) != 8 {
 				return fmt.Errorf("unexpected key locator length %d", len(field))
 			}
 			c.revocationLocator.Family = keychain.KeyFamily(binary.BigEndian.Uint32(field[:4]))
 			c.revocationLocator.Index = binary.BigEndian.Uint32(field[4:])
 
-		case 2:
+		case openChanTlvTypeInitialLocalBalance:
 			if len(field) != 8 {
 				return fmt.Errorf("unexpected local balance length %d", len(field))
 			}
 			c.initialLocalBalance = lnwire.MilliSatoshi(binary.BigEndian.Uint64(field))
 
-		case 3:
+		case openChanTlvTypeInitialRemoteBalance:
 			if len(field) != 8 {
 				return fmt.Errorf("unexpected remote balance length %d", len(field))
 			}
 			c.initialRemoteBalance = lnwire.MilliSatoshi(binary.BigEndian.Uint64(field))
 
-		case 4:
+		case openChanTlvTypeRealScid:
 			if len(field) != 8 {
 				return fmt.Errorf("unexpected real scid size %d", len(field))
 			}
@@ -424,7 +531,7 @@ func (c *chanInfo) decodeAuxData(r *bytes.Reader) error {
 				c.hasConfirmed = true
 			}
 
-		case 8:
+		case openChanTlvTypeConfirmationHeight:
 			if len(field) != 4 {
 				return fmt.Errorf("unexpected confirmation height len %d", len(field))
 			}
@@ -432,7 +539,7 @@ func (c *chanInfo) decodeAuxData(r *bytes.Reader) error {
 
 		default:
 			// Types 5-7 contain memo/tapscript/custom blobs, which we
-			// do not currently surface.
+			// currently ignore while rebuilding OpenChannel shells.
 			continue
 		}
 	}
@@ -466,6 +573,8 @@ func trimAuxData(data []byte) []byte {
 	return trimmed
 }
 
+// populateAuxData reattaches revocation state, lease expiration, and other
+// auxiliary fields that are stored outside the primary chan-info blob.
 func (c *chanInfo) populateAuxData(r io.ReaderAt, keyOffset int64) error {
 	state, err := findRevocationState(r, keyOffset)
 	if err != nil {
@@ -558,7 +667,7 @@ func shouldReadFundingTx(info *chanInfo) bool {
 }
 
 // frozenHeight looks up the frozen-chans sibling entry near the anchor offset
-// to recover the stored thaw height for leased channels.
+// to retrieve the stored thaw height for leased channels.
 func frozenHeight(r io.ReaderAt, anchor int64) (uint32, error) {
 	data, err := readSibling(r, anchor, "frozen-chans", 4)
 	if err != nil {
@@ -596,6 +705,8 @@ func readSibling(r io.ReaderAt, anchor int64, key string, size int) ([]byte, err
 
 // findCommitment searches within commitSearchRadius of the anchor for the
 // local commitment blob and, if found, parses it into commitInfo.
+// findCommitment searches for the local commitment serialization within
+// commitSearchRadius of the provided anchor offset.
 func findCommitment(r io.ReaderAt, anchor int64) (*commitInfo, error) {
 	keyBytes := append([]byte(commitKey), byte(0x00))
 	radius := int64(commitSearchRadius)
@@ -665,7 +776,7 @@ func parseCommitment(r io.ReaderAt, offset int64) (*commitInfo, error) {
 	}
 	info.Tx = tx
 
-	sig, err := readVarBytes(reader, 66000)
+	sig, err := readVarBytes(reader, commitSigMaxSize)
 	if err != nil {
 		return nil, err
 	}
@@ -674,11 +785,19 @@ func parseCommitment(r io.ReaderAt, offset int64) (*commitInfo, error) {
 	return info, nil
 }
 
+// revocationState mirrors the serialized revocation-state-key contents.
 type revocationState struct {
+	// remoteCurrent is the current revocation pubkey.
 	remoteCurrent *btcec.PublicKey
-	remoteNext    *btcec.PublicKey
-	producer      shachain.Producer
-	store         shachain.Store
+
+	// remoteNext is the next revocation pubkey.
+	remoteNext *btcec.PublicKey
+
+	// producer is the remote shachain producer.
+	producer shachain.Producer
+
+	// store is the remote shachain store.
+	store shachain.Store
 }
 
 // findRevocationState scans for the revocation-state-key entry near the
@@ -707,7 +826,7 @@ func findRevocationState(r io.ReaderAt, anchor int64) (*revocationState, error) 
 }
 
 // parseRevocationState converts the revocation-state-key payload into the
-// public keys, producer, and store structures needed for channel recovery.
+// public keys, producer, and store structures needed for channel rescue.
 func parseRevocationState(r io.ReaderAt, offset int64) (*revocationState, error) {
 	buf := make([]byte, 1<<16)
 	n, err := r.ReadAt(buf, offset)
