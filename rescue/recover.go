@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/lightninglabs/chantools/lnd"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -44,6 +46,38 @@ func RecoverChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 		return nil, errChannelNotFound
 	}
 	return matches, nil
+}
+
+// LoadChannels attempts to read all open channels from the given channel DB
+// path. If the Bolt database can be opened, it simply returns the channels
+// fetched through channeldb. If the DB cannot be opened and rescue mode is
+// enabled, the function falls back to scanning the raw file and rebuilding the
+// channels from disk. When rescue is false, the original open error is
+// returned.
+func LoadChannels(dbPath string, rescue bool) ([]*channeldb.OpenChannel, error) {
+	channelDB, _, err := lnd.OpenDB(dbPath, true)
+	if err == nil {
+		defer func() { _ = channelDB.Close() }()
+
+		return channelDB.ChannelStateDB().FetchAllChannels()
+	}
+	if !rescue {
+		return nil, fmt.Errorf("error opening channel DB: %w", err)
+	}
+
+	file, fileErr := os.Open(dbPath)
+	if fileErr != nil {
+		return nil, fmt.Errorf("error opening channel DB for recovery: %w",
+			fileErr)
+	}
+	defer func() { _ = file.Close() }()
+
+	recovered, recErr := RecoverChannels(file)
+	if recErr != nil {
+		return nil, recErr
+	}
+
+	return recovered, nil
 }
 
 func scanForChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {

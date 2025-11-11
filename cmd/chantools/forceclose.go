@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
@@ -98,25 +97,9 @@ func (c *forceCloseCommand) Execute(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-
-	var channels []*channeldb.OpenChannel
-	if c.Recover {
-		channels, err = c.recoverChannels(entries)
-		if err != nil {
-			return err
-		}
-	} else {
-		db, _, err := lnd.OpenDB(c.ChannelDB, true)
-		if err != nil {
-			return fmt.Errorf("error opening rescue DB: %w", err)
-		}
-		defer func() { _ = db.Close() }()
-
-		channels, err = db.ChannelStateDB().FetchAllChannels()
-		if err != nil {
-			return fmt.Errorf("failed to fetch channels, try "+
-				"--recover: %w", err)
-		}
+	channels, err := rescue.LoadChannels(c.ChannelDB, c.Recover)
+	if err != nil {
+		return err
 	}
 
 	return forceCloseChannels(
@@ -258,46 +241,4 @@ func forceCloseChannels(apiURL string, extendedKey *hdkeychain.ExtendedKey,
 		time.Now().Format("2006-01-02-15-04-05"))
 	log.Infof("Writing result to %s", fileName)
 	return os.WriteFile(fileName, summaryBytes, 0644)
-}
-
-func (c *forceCloseCommand) recoverChannels(
-	entries []*dataformat.SummaryEntry) ([]*channeldb.OpenChannel, error) {
-
-	file, err := os.Open(c.ChannelDB)
-	if err != nil {
-		return nil, fmt.Errorf("error opening channel DB for recovery: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
-	recovered, err := rescue.RecoverChannels(file)
-	if err != nil {
-		return nil, fmt.Errorf("error recovering channels: %w", err)
-	}
-
-	points := make(map[string]struct{})
-	for _, entry := range entries {
-		point := strings.TrimSpace(entry.ChannelPoint)
-		if point == "" {
-			continue
-		}
-		points[point] = struct{}{}
-	}
-	if len(points) == 0 {
-		return nil, errors.New("recover requires channel points in the input data")
-	}
-
-	var filtered []*channeldb.OpenChannel
-	for _, channel := range recovered {
-		if _, ok := points[channel.FundingOutpoint.String()]; ok {
-			filtered = append(filtered, channel)
-		}
-	}
-	if len(filtered) == 0 {
-		return nil, fmt.Errorf("no recovered channels matched provided channel points")
-	}
-
-	log.Infof("Recovered %d channel(s) matching provided channel points",
-		len(filtered))
-
-	return filtered, nil
 }

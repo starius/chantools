@@ -119,6 +119,46 @@ func TestRecoverChannelsFromCorruptedFile(t *testing.T) {
 	}
 }
 
+func TestLoadChannels(t *testing.T) {
+	clean := loadTestDB(t)
+	dir := t.TempDir()
+
+	cleanPath := filepath.Join(dir, "clean.db")
+	if err := os.WriteFile(cleanPath, clean, 0o600); err != nil {
+		t.Fatalf("write clean copy: %v", err)
+	}
+
+	chans, err := LoadChannels(cleanPath, false)
+	if err != nil {
+		t.Fatalf("load clean channels: %v", err)
+	}
+	if len(chans) == 0 {
+		t.Fatal("expected channels from clean db")
+	}
+
+	corrupted := make([]byte, len(clean))
+	copy(corrupted, clean)
+	for i := 0; i < 8192 && i < len(corrupted); i++ {
+		corrupted[i] = 0
+	}
+
+	corruptPath := filepath.Join(dir, "corrupt.db")
+	if err := os.WriteFile(corruptPath, corrupted, 0o600); err != nil {
+		t.Fatalf("write corrupt copy: %v", err)
+	}
+	if _, err := LoadChannels(corruptPath, false); err == nil {
+		t.Fatal("expected error without rescue")
+	}
+
+	recovered, err := LoadChannels(corruptPath, true)
+	if err != nil {
+		t.Fatalf("load channels with rescue: %v", err)
+	}
+	if len(recovered) == 0 {
+		t.Fatal("expected recovered channels")
+	}
+}
+
 func TestParseChanInfoAndCommit(t *testing.T) {
 	data := loadTestDB(t)
 	offsets := findKeyOffsets(data, []byte(infoKey))
