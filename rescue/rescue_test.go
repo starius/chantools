@@ -15,6 +15,7 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/shachain"
+	"github.com/stretchr/testify/require"
 )
 
 // loadTestDB reads the canned channel.db fixture from disk for use in tests.
@@ -22,9 +23,7 @@ func loadTestDB(t *testing.T) []byte {
 	t.Helper()
 	path := testDBPath(t)
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read test db: %v", err)
-	}
+	require.NoError(t, err, "loadTestDB read test db")
 	return data
 }
 
@@ -32,9 +31,7 @@ func loadTestDB(t *testing.T) []byte {
 func testDBPath(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot determine caller")
-	}
+	require.True(t, ok, "testDBPath determine caller")
 
 	return filepath.Clean(
 		filepath.Join(filepath.Dir(file), "..", "cmd", "chantools", "testdata", "channel.db"),
@@ -45,9 +42,7 @@ func testDBPath(t *testing.T) string {
 func rescueAll(t *testing.T, data []byte) []*channeldb.OpenChannel {
 	t.Helper()
 	chans, err := RescueChannels(bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("rescue channels: %v", err)
-	}
+	require.NoError(t, err, "rescueAll call rescue")
 	return chans
 }
 
@@ -63,11 +58,11 @@ func channelMap(chans []*channeldb.OpenChannel) map[string]*channeldb.OpenChanne
 // TestRescueChannelsFromCorruptedFile asserts that RescueChannels can rebuild
 // every entry even when the beginning of the DB file is clobbered.
 func TestRescueChannelsFromCorruptedFile(t *testing.T) {
+	req := require.New(t)
+
 	clean := loadTestDB(t)
 	baseline := rescueAll(t, clean)
-	if len(baseline) == 0 {
-		t.Fatal("expected channels from clean db")
-	}
+	req.NotEmpty(baseline, "TestRescueChannelsFromCorruptedFile baseline not empty")
 	baseMap := channelMap(baseline)
 
 	corrupted := make([]byte, len(clean))
@@ -78,80 +73,46 @@ func TestRescueChannelsFromCorruptedFile(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "channel.db")
-	if err := os.WriteFile(path, corrupted, 0o600); err != nil {
-		t.Fatalf("write temp db: %v", err)
-	}
-	if _, _, err := lnd.OpenDB(path, true); err == nil {
-		t.Fatal("expected corrupted db to fail opening")
-	}
+	require.NoError(t, os.WriteFile(path, corrupted, 0o600))
+	_, _, err := lnd.OpenDB(path, true)
+	req.Error(err, "expected corrupted db to fail opening")
 
 	rescued := rescueAll(t, corrupted)
-	if len(rescued) != len(baseline) {
-		t.Fatalf("expected %d channels, got %d", len(baseline), len(rescued))
-	}
+	req.Equal(len(baseline), len(rescued))
 
 	for _, ch := range rescued {
 		base, ok := baseMap[ch.FundingOutpoint.String()]
-		if !ok {
-			t.Fatalf("unexpected channel %s", ch.FundingOutpoint)
-		}
-		if ch.Capacity != base.Capacity {
-			t.Fatalf("capacity mismatch for %s", ch.FundingOutpoint)
-		}
-		if ch.LocalCommitment.CommitTx == nil {
-			t.Fatalf("missing commitment for %s", ch.FundingOutpoint)
-		}
-		if base.LocalCommitment.CommitTx == nil {
-			t.Fatalf("baseline missing commit for %s", ch.FundingOutpoint)
-		}
-		if ch.LocalCommitment.CommitTx.TxHash() != base.LocalCommitment.CommitTx.TxHash() {
-			t.Fatalf("commit tx mismatch for %s", ch.FundingOutpoint)
-		}
-		if !locatorsEqual(ch.RevocationKeyLocator, base.RevocationKeyLocator) {
-			t.Fatalf("revocation locator mismatch for %s", ch.FundingOutpoint)
-		}
-		if !pubKeyEqual(ch.RemoteCurrentRevocation, base.RemoteCurrentRevocation) {
-			t.Fatalf("remote current revocation mismatch for %s", ch.FundingOutpoint)
-		}
-		if !pubKeyEqual(ch.RemoteNextRevocation, base.RemoteNextRevocation) {
-			t.Fatalf("remote next revocation mismatch for %s", ch.FundingOutpoint)
-		}
-		if !bytes.Equal(producerBytes(t, ch.RevocationProducer), producerBytes(t, base.RevocationProducer)) {
-			t.Fatalf("revocation producer mismatch for %s", ch.FundingOutpoint)
-		}
-		if !bytes.Equal(storeBytes(t, ch.RevocationStore), storeBytes(t, base.RevocationStore)) {
-			t.Fatalf("revocation store mismatch for %s", ch.FundingOutpoint)
-		}
+		req.True(ok, "unexpected channel %s", ch.FundingOutpoint)
+		req.Equal(base.Capacity, ch.Capacity, "capacity mismatch %s", ch.FundingOutpoint)
+		req.NotNil(ch.LocalCommitment.CommitTx, "missing commitment %s", ch.FundingOutpoint)
+		req.NotNil(base.LocalCommitment.CommitTx, "baseline missing commitment %s", ch.FundingOutpoint)
+		req.Equal(base.LocalCommitment.CommitTx.TxHash(), ch.LocalCommitment.CommitTx.TxHash())
+		req.True(locatorsEqual(ch.RevocationKeyLocator, base.RevocationKeyLocator), "revocation locator mismatch %s", ch.FundingOutpoint)
+		req.True(pubKeyEqual(ch.RemoteCurrentRevocation, base.RemoteCurrentRevocation), "remote current revocation mismatch %s", ch.FundingOutpoint)
+		req.True(pubKeyEqual(ch.RemoteNextRevocation, base.RemoteNextRevocation), "remote next revocation mismatch %s", ch.FundingOutpoint)
+		req.True(bytes.Equal(producerBytes(t, ch.RevocationProducer), producerBytes(t, base.RevocationProducer)), "revocation producer mismatch %s", ch.FundingOutpoint)
+		req.True(bytes.Equal(storeBytes(t, ch.RevocationStore), storeBytes(t, base.RevocationStore)), "revocation store mismatch %s", ch.FundingOutpoint)
 	}
 }
 
 // TestLoadChannels covers both the normal channeldb load path and the rescue
 // fallback when the file cannot be opened.
 func TestLoadChannels(t *testing.T) {
+	req := require.New(t)
+
 	clean := loadTestDB(t)
 	dir := t.TempDir()
 
 	cleanPath := filepath.Join(dir, "clean.db")
-	if err := os.WriteFile(cleanPath, clean, 0o600); err != nil {
-		t.Fatalf("write clean copy: %v", err)
-	}
+	req.NoError(os.WriteFile(cleanPath, clean, 0o600))
 
 	chans, err := LoadChannels(cleanPath, false)
-	if err != nil {
-		t.Fatalf("load clean channels: %v", err)
-	}
-	if len(chans) == 0 {
-		t.Fatal("expected channels from clean db")
-	}
+	req.NoError(err)
+	req.NotEmpty(chans, "TestLoadChannels clean fetch")
 
 	rescuedClean, err := LoadChannels(cleanPath, true)
-	if err != nil {
-		t.Fatalf("load clean channels with rescue: %v", err)
-	}
-	if len(rescuedClean) != len(chans) {
-		t.Fatalf("expected %d rescued clean channels, got %d",
-			len(chans), len(rescuedClean))
-	}
+	req.NoError(err)
+	req.Len(rescuedClean, len(chans))
 
 	corrupted := make([]byte, len(clean))
 	copy(corrupted, clean)
@@ -160,108 +121,69 @@ func TestLoadChannels(t *testing.T) {
 	}
 
 	corruptPath := filepath.Join(dir, "corrupt.db")
-	if err := os.WriteFile(corruptPath, corrupted, 0o600); err != nil {
-		t.Fatalf("write corrupt copy: %v", err)
-	}
-	if _, err := LoadChannels(corruptPath, false); err == nil {
-		t.Fatal("expected error without rescue")
-	}
+	req.NoError(os.WriteFile(corruptPath, corrupted, 0o600))
+	_, err = LoadChannels(corruptPath, false)
+	req.Error(err, "expected error without rescue")
 
 	rescued, err := LoadChannels(corruptPath, true)
-	if err != nil {
-		t.Fatalf("load channels with rescue: %v", err)
-	}
-	if len(rescued) == 0 {
-		t.Fatal("expected rescued channels")
-	}
+	req.NoError(err)
+	req.NotEmpty(rescued, "expected rescued channels")
 }
 
 // TestParseChanInfoAndCommit ensures we can parse the chan-info and commitment
 // payloads at a given offset without error.
 func TestParseChanInfoAndCommit(t *testing.T) {
+	req := require.New(t)
+
 	data := loadTestDB(t)
 	offsets := findKeyOffsets(data, []byte(infoKey))
-	if len(offsets) == 0 {
-		t.Fatal("no chan-info-key entries found")
-	}
+	req.NotEmpty(offsets, "no chan-info-key entries found")
 	keyOffset := offsets[0]
 
 	info, err := parseChanInfo(bytes.NewReader(data), keyOffset, keyOffset+int64(len(infoKey)))
-	if err != nil {
-		t.Fatalf("parse channel info: %v", err)
-	}
-
-	if (info.outpoint == wire.OutPoint{}) {
-		t.Fatalf("expected funding outpoint, got zero")
-	}
-
-	if err := info.populateAuxData(bytes.NewReader(data), keyOffset); err != nil {
-		t.Fatalf("populate aux data: %v", err)
-	}
+	req.NoError(err)
+	req.NotEqual(wire.OutPoint{}, info.outpoint)
+	req.NoError(info.populateAuxData(bytes.NewReader(data), keyOffset))
 
 	commit, err := findCommitment(bytes.NewReader(data), keyOffset)
-	if err != nil {
-		t.Fatalf("find commitment: %v", err)
-	}
-	if commit.Tx == nil {
-		t.Fatal("expected commitment tx")
-	}
+	req.NoError(err)
+	req.NotNil(commit.Tx)
 
-	if _, err := rescueChannelAtOffset(bytes.NewReader(data), keyOffset); err != nil {
-		t.Fatalf("rescue at offset: %v", err)
-	}
+	_, err = rescueChannelAtOffset(bytes.NewReader(data), keyOffset)
+	req.NoError(err)
 }
 
 // TestParseRevocationState ensures that the revocation state blob is decoded
 // into the expected keys, producer, and store.
 func TestParseRevocationState(t *testing.T) {
+	req := require.New(t)
+
 	priv1, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatalf("priv1: %v", err)
-	}
+	req.NoError(err)
 	priv2, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatalf("priv2: %v", err)
-	}
+	req.NoError(err)
 
 	var root chainhash.Hash
-	if _, err := rand.Read(root[:]); err != nil {
-		t.Fatalf("rand root: %v", err)
-	}
+	_, err = rand.Read(root[:])
+	req.NoError(err)
 	producer := shachain.NewRevocationProducer(root)
 	store := shachain.NewRevocationStore()
 
 	secret, err := producer.AtIndex(0)
-	if err != nil {
-		t.Fatalf("producer at index: %v", err)
-	}
-	if err := store.AddNextEntry(secret); err != nil {
-		t.Fatalf("store add: %v", err)
-	}
+	req.NoError(err)
+	req.NoError(store.AddNextEntry(secret))
 
 	var buf bytes.Buffer
-	if err := channeldb.WriteElements(
+	req.NoError(channeldb.WriteElements(
 		&buf, priv1.PubKey(), producer, store, priv2.PubKey(),
-	); err != nil {
-		t.Fatalf("write rev state: %v", err)
-	}
+	))
 
 	state, err := parseRevocationState(bytes.NewReader(buf.Bytes()), 0)
-	if err != nil {
-		t.Fatalf("parse revocation state: %v", err)
-	}
-	if !pubKeyEqual(state.remoteCurrent, priv1.PubKey()) {
-		t.Fatal("unexpected current revocation")
-	}
-	if !pubKeyEqual(state.remoteNext, priv2.PubKey()) {
-		t.Fatal("unexpected next revocation")
-	}
-	if !bytes.Equal(producerBytes(t, state.producer), producerBytes(t, producer)) {
-		t.Fatal("unexpected producer payload")
-	}
-	if !bytes.Equal(storeBytes(t, state.store), storeBytes(t, store)) {
-		t.Fatal("unexpected store payload")
-	}
+	req.NoError(err)
+	req.True(pubKeyEqual(state.remoteCurrent, priv1.PubKey()))
+	req.True(pubKeyEqual(state.remoteNext, priv2.PubKey()))
+	req.True(bytes.Equal(producerBytes(t, state.producer), producerBytes(t, producer)))
+	req.True(bytes.Equal(storeBytes(t, state.store), storeBytes(t, store)))
 }
 
 func findKeyOffsets(data []byte, key []byte) []int64 {
@@ -299,9 +221,7 @@ func producerBytes(t *testing.T, p shachain.Producer) []byte {
 		return nil
 	}
 	var buf bytes.Buffer
-	if err := p.Encode(&buf); err != nil {
-		t.Fatalf("encode producer: %v", err)
-	}
+	require.NoError(t, p.Encode(&buf))
 	return buf.Bytes()
 }
 
@@ -311,8 +231,6 @@ func storeBytes(t *testing.T, s shachain.Store) []byte {
 		return nil
 	}
 	var buf bytes.Buffer
-	if err := s.Encode(&buf); err != nil {
-		t.Fatalf("encode store: %v", err)
-	}
+	require.NoError(t, s.Encode(&buf))
 	return buf.Bytes()
 }
