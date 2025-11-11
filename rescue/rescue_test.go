@@ -23,7 +23,7 @@ func loadTestDB(t *testing.T) []byte {
 	t.Helper()
 	path := testDBPath(t)
 	data, err := os.ReadFile(path)
-	require.NoError(t, err, "loadTestDB read test db")
+	require.NoError(t, err, "loadTestDB read file")
 	return data
 }
 
@@ -85,15 +85,15 @@ func TestRescueChannelsFromCorruptedFile(t *testing.T) {
 	for _, ch := range rescued {
 		base, ok := baseMap[ch.FundingOutpoint.String()]
 		req.True(ok, "unexpected channel %s", ch.FundingOutpoint)
-		req.Equal(base.Capacity, ch.Capacity, "capacity mismatch %s", ch.FundingOutpoint)
-		req.NotNil(ch.LocalCommitment.CommitTx, "missing commitment %s", ch.FundingOutpoint)
-		req.NotNil(base.LocalCommitment.CommitTx, "baseline missing commitment %s", ch.FundingOutpoint)
-		req.Equal(base.LocalCommitment.CommitTx.TxHash(), ch.LocalCommitment.CommitTx.TxHash())
+		req.Equalf(base.Capacity, ch.Capacity, "capacity mismatch %s", ch.FundingOutpoint)
+		req.NotNilf(ch.LocalCommitment.CommitTx, "missing commitment %s", ch.FundingOutpoint)
+		req.NotNilf(base.LocalCommitment.CommitTx, "baseline missing commitment %s", ch.FundingOutpoint)
+		req.Equal(base.LocalCommitment.CommitTx.TxHash(), ch.LocalCommitment.CommitTx.TxHash(), "commit tx mismatch %s", ch.FundingOutpoint)
 		req.True(locatorsEqual(ch.RevocationKeyLocator, base.RevocationKeyLocator), "revocation locator mismatch %s", ch.FundingOutpoint)
 		req.True(pubKeyEqual(ch.RemoteCurrentRevocation, base.RemoteCurrentRevocation), "remote current revocation mismatch %s", ch.FundingOutpoint)
 		req.True(pubKeyEqual(ch.RemoteNextRevocation, base.RemoteNextRevocation), "remote next revocation mismatch %s", ch.FundingOutpoint)
-		req.True(bytes.Equal(producerBytes(t, ch.RevocationProducer), producerBytes(t, base.RevocationProducer)), "revocation producer mismatch %s", ch.FundingOutpoint)
-		req.True(bytes.Equal(storeBytes(t, ch.RevocationStore), storeBytes(t, base.RevocationStore)), "revocation store mismatch %s", ch.FundingOutpoint)
+		req.Equalf(producerBytes(t, base.RevocationProducer), producerBytes(t, ch.RevocationProducer), "revocation producer mismatch %s", ch.FundingOutpoint)
+		req.Equalf(storeBytes(t, base.RevocationStore), storeBytes(t, ch.RevocationStore), "revocation store mismatch %s", ch.FundingOutpoint)
 	}
 }
 
