@@ -44,7 +44,7 @@ chantools forceclose \
       --listchannels string      channel input is in the format of lncli's listchannels format; specify '-' to read from stdin
       --pendingchannels string   channel input is in the format of lncli's pendingchannels format; specify '-' to read from stdin
       --publish                  publish force-closing TX to the chain API instead of just printing the TX
-      --rescue                   fall back to raw channel.db rescue if the database cannot be opened normally
+      --rescue                   rescue channels directly from a raw channel.db without opening it with lnd
       --rootkey string           BIP32 HD root key of the wallet to use for decrypting the backup; leave empty to prompt for lnd 24 word aezeed
       --walletdb string          read the seed/master root key to use for decrypting the backup from an lnd wallet.db file instead of asking for a seed or providing the --rootkey flag
 ```
@@ -62,3 +62,4 @@ chantools forceclose \
 ### SEE ALSO
 
 * [chantools](chantools.md)	 - Chantools helps recover funds from lightning channels
+
