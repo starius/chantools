@@ -42,6 +42,7 @@ type rescueClosedCommand struct {
 	CommitPoint string
 	LndLog      string
 	NumKeys     uint32
+	Rescue      bool
 
 	rootKey *rootKey
 	inputs  *inputFlags
@@ -111,6 +112,10 @@ chantools rescueclosed --fromsummary results/summary-xxxxxx.json \
 		&cc.NumKeys, "num_keys", defaultNumKeys, "the number of keys "+
 			"to derive for the brute force attack",
 	)
+	cc.cmd.Flags().BoolVar(
+		&cc.Rescue, "rescue", false, "fall back to raw channel.db "+
+			"rescue if the DB cannot be opened normally",
+	)
 	cc.rootKey = newRootKey(cc.cmd, "decrypting the backup")
 	cc.inputs = newInputFlags(cc.cmd)
 
@@ -133,7 +138,7 @@ func (c *rescueClosedCommand) Execute(_ *cobra.Command, _ []string) error {
 			return err
 		}
 
-		channels, err := rescue.LoadChannels(c.ChannelDB, true)
+		channels, err := rescue.LoadChannels(c.ChannelDB, c.Rescue)
 		if err != nil {
 			return fmt.Errorf("error loading channels: %w", err)
 		}
