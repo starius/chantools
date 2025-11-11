@@ -28,6 +28,10 @@ var (
 	// errRevocationNotFound indicates the revocation blob is missing near
 	// a chan-info-key entry.
 	errRevocationNotFound = errors.New("revocation state not found")
+
+	// rescueDebugEnabled toggles additional debug logging when scanning a
+	// database. It can be enabled by setting CHANTOOLS_DEBUG_RESCUE.
+	rescueDebugEnabled = os.Getenv("CHANTOOLS_DEBUG_RESCUE") != ""
 )
 
 const (
@@ -97,6 +101,12 @@ func RescueChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 		return nil, errChannelNotFound
 	}
 	return matches, nil
+}
+
+func debugRescuef(format string, args ...interface{}) {
+	if rescueDebugEnabled {
+		fmt.Printf("rescue debug: "+format+"\n", args...)
+	}
 }
 
 // LoadChannels attempts to read all open channels from the given channel DB
@@ -192,7 +202,12 @@ func scanForChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 
 				absolute := base + int64(searchFrom+idx)
 				channel, err := rescueChannelAtOffset(r, absolute)
-				if err == nil {
+				if err != nil {
+					debugRescuef("skip chan-info @0x%x: %v",
+						absolute, err)
+				} else {
+					debugRescuef("rescued chan-info @0x%x (%s)",
+						absolute, channel.FundingOutpoint)
 					channels = append(channels, channel)
 				}
 
@@ -590,13 +605,21 @@ func trimAuxData(data []byte) []byte {
 // auxiliary fields that are stored outside the primary chan-info blob.
 func (c *chanInfo) populateAuxData(r io.ReaderAt, keyOffset int64) error {
 	state, err := findRevocationState(r, keyOffset)
-	if err != nil {
+	switch {
+	case err == nil:
+		c.remoteCurrent = state.remoteCurrent
+		c.remoteNext = state.remoteNext
+		c.revocationProd = state.producer
+		c.revocationStore = state.store
+
+	case errors.Is(err, errRevocationNotFound):
+		// Missing revocation data is expected for some corrupted
+		// databases; we still attempt to rebuild the channel even if we
+		// cannot recover the shachain state.
+
+	default:
 		return err
 	}
-	c.remoteCurrent = state.remoteCurrent
-	c.remoteNext = state.remoteNext
-	c.revocationProd = state.producer
-	c.revocationStore = state.store
 
 	if c.chanType.HasLeaseExpiration() {
 		if height, err := frozenHeight(r, keyOffset); err == nil {
