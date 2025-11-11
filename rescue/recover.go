@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
+	"unsafe"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
@@ -34,9 +36,17 @@ const (
 	commitmentReadLimit = 1 << 20
 )
 
-// RecoverChannels scans a raw channel.db byte stream and attempts to rebuild
-// as many open channels as possible. The reader must implement io.ReaderAt so
-// random access near recovered keys is possible.
+// RecoverChannels scans a raw channel.db byte stream and rebuilds every entry
+// that still lives in LND's open-channel bucket. This includes:
+//   - Pending-open channels (funding TX not yet confirmed)
+//   - Fully open/active channels
+//   - Channels whose closing transaction has been broadcast but not fully
+//     settled yet (aka "waiting close", represented in LND by chanStatus flags)
+//
+// Channels that have already been moved to the closed/historical buckets are
+// not surfaced, because their metadata is stored elsewhere in channel.db.
+// The reader must implement io.ReaderAt so random access near recovered keys
+// is possible.
 func RecoverChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
 	matches, err := scanForChannels(r)
 	if err != nil {
@@ -78,6 +88,24 @@ func LoadChannels(dbPath string, rescue bool) ([]*channeldb.OpenChannel, error) 
 	}
 
 	return recovered, nil
+}
+
+// setChannelStatus mutates the private chanStatus field on channeldb.OpenChannel
+// using reflection+unsafe so recovered channels retain their waiting-close
+// metadata for in-memory filtering. This avoids the need for a live DB handle.
+func setChannelStatus(channel *channeldb.OpenChannel, status channeldb.ChannelStatus) {
+	if channel == nil {
+		return
+	}
+
+	field := reflect.ValueOf(channel).Elem().FieldByName("chanStatus")
+	if !field.IsValid() {
+		return
+	}
+
+	ptr := unsafe.Pointer(field.UnsafeAddr())
+	typed := (*channeldb.ChannelStatus)(ptr)
+	*typed = status
 }
 
 func scanForChannels(r io.ReaderAt) ([]*channeldb.OpenChannel, error) {
@@ -164,6 +192,7 @@ type chanInfo struct {
 
 	isPending   bool
 	isInitiator bool
+	status      channeldb.ChannelStatus
 
 	fundingHeight  uint32
 	numConfs       uint16
@@ -246,9 +275,11 @@ func parseChanInfo(r io.ReaderAt, keyOffset, dataOffset int64) (*chanInfo, error
 		return nil, err
 	}
 
-	if _, err := readVarInt(reader); err != nil {
+	status, err := readVarInt(reader)
+	if err != nil {
 		return nil, err
 	}
+	info.status = channeldb.ChannelStatus(status)
 
 	if info.fundingHeight, err = readUint32(reader); err != nil {
 		return nil, err
@@ -469,6 +500,7 @@ func (c *chanInfo) buildChannel(commit *commitInfo) *channeldb.OpenChannel {
 		RevocationKeyLocator:   c.revocationLocator,
 		ThawHeight:             c.leaseExpiry,
 	}
+	setChannelStatus(channel, c.status)
 	channel.RemoteCurrentRevocation = c.remoteCurrent
 	channel.RemoteNextRevocation = c.remoteNext
 	channel.RevocationProducer = c.revocationProd

@@ -52,8 +52,8 @@ given lnd channel.db gile in a human readable format.`,
 	)
 	cc.cmd.Flags().BoolVar(
 		&cc.Recover, "recover", false, "fall back to raw channel.db "+
-			"recovery when dumping open channels and the DB cannot be "+
-			"opened normally",
+			"recovery when dumping open channels and the DB "+
+			"cannot be opened normally",
 	)
 
 	return cc.cmd
@@ -70,10 +70,9 @@ func (c *dumpChannelsCommand) Execute(_ *cobra.Command, _ []string) error {
 		return errors.New("can only specify one flag at a time")
 	}
 
-	if c.Closed || c.Pending || c.WaitingClose {
+	if c.Closed {
 		if c.Recover {
-			return errors.New("--recover can only be used when " +
-				"dumping open channels")
+			return errors.New("--recover cannot be used with --closed")
 		}
 
 		db, _, err := lnd.OpenDB(c.ChannelDB, true)
@@ -82,22 +81,48 @@ func (c *dumpChannelsCommand) Execute(_ *cobra.Command, _ []string) error {
 		}
 		defer func() { _ = db.Close() }()
 
-		switch {
-		case c.Closed:
-			return dumpClosedChannelInfo(db.ChannelStateDB())
-		case c.Pending:
-			return dumpPendingChannelInfo(db.ChannelStateDB())
-		case c.WaitingClose:
-			return dumpWaitingCloseChannelInfo(db.ChannelStateDB())
-		}
+		return dumpClosedChannelInfo(db.ChannelStateDB())
 	}
 
-	channels, err := rescue.LoadChannels(c.ChannelDB, c.Recover)
+	recoverFallback := c.Recover
+	channels, err := rescue.LoadChannels(c.ChannelDB, recoverFallback)
 	if err != nil {
 		return err
 	}
 
-	return dumpOpenChannelInfo(channels)
+	openChans, pendingChans, waitingChans := partitionChannels(channels)
+
+	switch {
+	case c.Pending:
+		return dumpPendingChannelInfo(pendingChans)
+
+	case c.WaitingClose:
+		return dumpWaitingCloseChannelInfo(waitingChans)
+
+	default:
+		return dumpOpenChannelInfo(openChans)
+	}
+}
+
+func partitionChannels(channels []*channeldb.OpenChannel) (
+	[]*channeldb.OpenChannel, []*channeldb.OpenChannel,
+	[]*channeldb.OpenChannel) {
+
+	var open, pending, waiting []*channeldb.OpenChannel
+	for _, channel := range channels {
+		switch {
+		case channel.IsPending:
+			pending = append(pending, channel)
+
+		case channel.ChanStatus() != channeldb.ChanStatusDefault:
+			waiting = append(waiting, channel)
+
+		default:
+			open = append(open, channel)
+		}
+	}
+
+	return open, pending, waiting
 }
 
 func dumpOpenChannelInfo(channels []*channeldb.OpenChannel) error {
@@ -157,12 +182,7 @@ func dumpClosedChannelInfo(chanDb *channeldb.ChannelStateDB) error {
 	return nil
 }
 
-func dumpPendingChannelInfo(chanDb *channeldb.ChannelStateDB) error {
-	channels, err := chanDb.FetchPendingChannels()
-	if err != nil {
-		return err
-	}
-
+func dumpPendingChannelInfo(channels []*channeldb.OpenChannel) error {
 	dumpChannels, err := dump.OpenChannelDump(channels, chainParams)
 	if err != nil {
 		return fmt.Errorf("error converting to dump format: %w", err)
@@ -176,12 +196,7 @@ func dumpPendingChannelInfo(chanDb *channeldb.ChannelStateDB) error {
 	return nil
 }
 
-func dumpWaitingCloseChannelInfo(chanDb *channeldb.ChannelStateDB) error {
-	channels, err := chanDb.FetchWaitingCloseChannels()
-	if err != nil {
-		return err
-	}
-
+func dumpWaitingCloseChannelInfo(channels []*channeldb.OpenChannel) error {
 	dumpChannels, err := dump.OpenChannelDump(channels, chainParams)
 	if err != nil {
 		return fmt.Errorf("error converting to dump format: %w", err)
